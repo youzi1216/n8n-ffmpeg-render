@@ -8,7 +8,12 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+
+app.use(
+  express.json({
+    limit: '10mb',
+  })
+);
 
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY || '';
@@ -17,19 +22,38 @@ const BASE_DIR = '/tmp/n8n-render';
 const JOB_DIR = path.join(BASE_DIR, 'jobs');
 const OUTPUT_DIR = path.join(BASE_DIR, 'outputs');
 
-fs.mkdirSync(JOB_DIR, { recursive: true });
-fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+fs.mkdirSync(JOB_DIR, {
+  recursive: true,
+});
+
+fs.mkdirSync(OUTPUT_DIR, {
+  recursive: true,
+});
+
+
+// ======================================================
+// JOB STORAGE
+// ======================================================
 
 function jobFile(jobId) {
-  return path.join(JOB_DIR, `${jobId}.json`);
+  return path.join(
+    JOB_DIR,
+    `${jobId}.json`
+  );
 }
+
 
 function saveJob(jobId, data) {
   fs.writeFileSync(
     jobFile(jobId),
-    JSON.stringify(data, null, 2)
+    JSON.stringify(
+      data,
+      null,
+      2
+    )
   );
 }
+
 
 function loadJob(jobId) {
   const file = jobFile(jobId);
@@ -39,44 +63,81 @@ function loadJob(jobId) {
   }
 
   return JSON.parse(
-    fs.readFileSync(file, 'utf8')
+    fs.readFileSync(
+      file,
+      'utf8'
+    )
   );
 }
 
-function updateJob(jobId, changes) {
-  const current = loadJob(jobId) || {};
+
+function updateJob(
+  jobId,
+  changes
+) {
+  const current =
+    loadJob(jobId) || {};
 
   const updated = {
     ...current,
     ...changes,
-    updatedAt: new Date().toISOString(),
+
+    updatedAt:
+      new Date().toISOString(),
   };
 
-  saveJob(jobId, updated);
+  saveJob(
+    jobId,
+    updated
+  );
 
   return updated;
 }
 
-function checkApiKey(req, res, next) {
+
+// ======================================================
+// API KEY
+// ======================================================
+
+function checkApiKey(
+  req,
+  res,
+  next
+) {
   if (!API_KEY) {
     return next();
   }
 
-  const key = req.headers['x-api-key'];
+  const key =
+    req.headers['x-api-key'];
 
   if (key !== API_KEY) {
-    return res.status(401).json({
-      error: 'Unauthorized',
-    });
+    return res
+      .status(401)
+      .json({
+        error: 'Unauthorized',
+      });
   }
 
   next();
 }
 
-async function downloadFile(url, outputPath) {
-  const response = await fetch(url, {
-    redirect: 'follow',
-  });
+
+// ======================================================
+// DOWNLOAD FILE
+// ======================================================
+
+async function downloadFile(
+  url,
+  outputPath
+) {
+  const response =
+    await fetch(
+      url,
+      {
+        redirect: 'follow',
+      }
+    );
 
   if (!response.ok) {
     throw new Error(
@@ -84,32 +145,50 @@ async function downloadFile(url, outputPath) {
     );
   }
 
-  const buffer = Buffer.from(
-    await response.arrayBuffer()
-  );
+  const buffer =
+    Buffer.from(
+      await response.arrayBuffer()
+    );
 
-  fs.writeFileSync(outputPath, buffer);
+  fs.writeFileSync(
+    outputPath,
+    buffer
+  );
 }
 
-async function getAudioDuration(filePath) {
-  const { stdout } = await execFileAsync(
-    'ffprobe',
-    [
-      '-v',
-      'error',
-      '-show_entries',
-      'format=duration',
-      '-of',
-      'default=noprint_wrappers=1:nokey=1',
-      filePath,
-    ]
-  );
 
-  const duration = parseFloat(
-    stdout.trim()
-  );
+// ======================================================
+// AUDIO DURATION
+// ======================================================
 
-  if (!Number.isFinite(duration)) {
+async function getAudioDuration(
+  filePath
+) {
+  const { stdout } =
+    await execFileAsync(
+      'ffprobe',
+      [
+        '-v',
+        'error',
+
+        '-show_entries',
+        'format=duration',
+
+        '-of',
+        'default=noprint_wrappers=1:nokey=1',
+
+        filePath,
+      ]
+    );
+
+  const duration =
+    parseFloat(
+      stdout.trim()
+    );
+
+  if (
+    !Number.isFinite(duration)
+  ) {
     throw new Error(
       'Unable to detect audio duration'
     );
@@ -118,12 +197,19 @@ async function getAudioDuration(filePath) {
   return duration;
 }
 
+
+// ======================================================
+// MERGE AUDIO
+// ======================================================
+
 async function mergeAudio(
   audioFiles,
   workDir,
   jobId
 ) {
-  if (audioFiles.length === 1) {
+  if (
+    audioFiles.length === 1
+  ) {
     console.log(
       `[${jobId}] only one audio file, skip merge`
     );
@@ -135,20 +221,25 @@ async function mergeAudio(
     `[${jobId}] merging ${audioFiles.length} audio files`
   );
 
-  const listPath = path.join(
-    workDir,
-    'audio-list.txt'
-  );
+  const listPath =
+    path.join(
+      workDir,
+      'audio-list.txt'
+    );
 
-  const mergedPath = path.join(
-    workDir,
-    'merged-audio.m4a'
-  );
+  const mergedPath =
+    path.join(
+      workDir,
+      'merged-audio.m4a'
+    );
 
   let content = '';
 
-  for (const file of audioFiles) {
-    content += `file '${file}'\n`;
+  for (
+    const file of audioFiles
+  ) {
+    content +=
+      `file '${file}'\n`;
   }
 
   fs.writeFileSync(
@@ -160,21 +251,33 @@ async function mergeAudio(
     'ffmpeg',
     [
       '-y',
+
       '-f',
       'concat',
+
       '-safe',
       '0',
+
       '-i',
       listPath,
+
       '-c:a',
       'aac',
+
       '-b:a',
-      '128k',
+      '192k',
+
+      '-ar',
+      '48000',
+
+      '-ac',
+      '2',
+
       mergedPath,
     ],
     {
       maxBuffer:
-        1024 * 1024 * 20,
+        1024 * 1024 * 30,
     }
   );
 
@@ -185,34 +288,57 @@ async function mergeAudio(
   return mergedPath;
 }
 
+
+// ======================================================
+// MAIN VIDEO RENDER
+// ======================================================
+
 async function renderVideo(
   jobId,
   payload
 ) {
-  const workDir = path.join(
-    BASE_DIR,
-    `work-${jobId}`
-  );
+  const workDir =
+    path.join(
+      BASE_DIR,
+      `work-${jobId}`
+    );
 
   console.log(
     `[${jobId}] render started`
   );
 
   try {
-    updateJob(jobId, {
-      status: 'processing',
-      error: null,
-    });
+    updateJob(
+      jobId,
+      {
+        status: 'processing',
+        error: null,
+      }
+    );
 
-    fs.mkdirSync(workDir, {
-      recursive: true,
-    });
+    fs.mkdirSync(
+      workDir,
+      {
+        recursive: true,
+      }
+    );
 
-    const scenes = Array.isArray(
-      payload.scenes
-    )
-      ? payload.scenes
-      : [];
+
+    // ==================================================
+    // READ SCENES
+    // ==================================================
+
+    const scenes =
+      Array.isArray(
+        payload.scenes
+      )
+        ? payload.scenes
+        : [];
+
+
+    // ==================================================
+    // READ AUDIO
+    // ==================================================
 
     let audioParts = [];
 
@@ -223,17 +349,21 @@ async function renderVideo(
     ) {
       audioParts =
         payload.audio_parts;
-    } else if (
+    }
+
+    else if (
       payload.audio_url
     ) {
       audioParts = [
         {
           part_index: 1,
+
           audio_url:
             payload.audio_url,
         },
       ];
     }
+
 
     console.log(
       `[${jobId}] scenes = ${scenes.length}`
@@ -243,11 +373,15 @@ async function renderVideo(
       `[${jobId}] audio parts = ${audioParts.length}`
     );
 
-    if (scenes.length === 0) {
+
+    if (
+      scenes.length === 0
+    ) {
       throw new Error(
         'No scenes were provided'
       );
     }
+
 
     if (
       audioParts.length === 0
@@ -257,6 +391,11 @@ async function renderVideo(
       );
     }
 
+
+    // ==================================================
+    // DOWNLOAD IMAGES
+    // ==================================================
+
     const imageFiles = [];
 
     for (
@@ -264,9 +403,12 @@ async function renderVideo(
       i < scenes.length;
       i++
     ) {
-      const scene = scenes[i];
+      const scene =
+        scenes[i];
 
-      if (!scene.image_url) {
+      if (
+        !scene.image_url
+      ) {
         throw new Error(
           `Scene ${i + 1} has no image_url`
         );
@@ -279,6 +421,7 @@ async function renderVideo(
       const imagePath =
         path.join(
           workDir,
+
           `scene_${String(
             i + 1
           ).padStart(
@@ -297,9 +440,15 @@ async function renderVideo(
       );
     }
 
+
     console.log(
       `[${jobId}] all images downloaded`
     );
+
+
+    // ==================================================
+    // DOWNLOAD AUDIO
+    // ==================================================
 
     const audioFiles = [];
 
@@ -311,7 +460,9 @@ async function renderVideo(
       const audio =
         audioParts[i];
 
-      if (!audio.audio_url) {
+      if (
+        !audio.audio_url
+      ) {
         throw new Error(
           `Audio part ${i + 1} has no audio_url`
         );
@@ -324,6 +475,7 @@ async function renderVideo(
       const audioPath =
         path.join(
           workDir,
+
           `audio_${String(
             i + 1
           ).padStart(
@@ -342,9 +494,15 @@ async function renderVideo(
       );
     }
 
+
     console.log(
       `[${jobId}] all audio files downloaded`
     );
+
+
+    // ==================================================
+    // PREPARE AUDIO
+    // ==================================================
 
     console.log(
       `[${jobId}] preparing final audio`
@@ -357,18 +515,26 @@ async function renderVideo(
         jobId
       );
 
+
     console.log(
       `[${jobId}] reading audio duration`
     );
+
 
     const totalAudioDuration =
       await getAudioDuration(
         finalAudioPath
       );
 
+
+    // ==================================================
+    // AUTOMATIC SCENE DURATION
+    // ==================================================
+
     const sceneDuration =
       totalAudioDuration /
       imageFiles.length;
+
 
     console.log(
       `[${jobId}] audio duration = ${totalAudioDuration}`
@@ -378,11 +544,22 @@ async function renderVideo(
       `[${jobId}] scene duration = ${sceneDuration}`
     );
 
-    updateJob(jobId, {
-      audioDuration:
-        totalAudioDuration,
-      sceneDuration,
-    });
+
+    updateJob(
+      jobId,
+      {
+        audioDuration:
+          totalAudioDuration,
+
+        sceneDuration:
+          sceneDuration,
+      }
+    );
+
+
+    // ==================================================
+    // CREATE IMAGE CONCAT FILE
+    // ==================================================
 
     const concatPath =
       path.join(
@@ -390,7 +567,9 @@ async function renderVideo(
         'images.txt'
       );
 
+
     let concatText = '';
+
 
     for (
       const imageFile
@@ -403,6 +582,8 @@ async function renderVideo(
         `duration ${sceneDuration}\n`;
     }
 
+
+    // FFmpeg concat requires last image repeated
     concatText +=
       `file '${
         imageFiles[
@@ -410,10 +591,16 @@ async function renderVideo(
         ]
       }'\n`;
 
+
     fs.writeFileSync(
       concatPath,
       concatText
     );
+
+
+    // ==================================================
+    // OUTPUT PATH
+    // ==================================================
 
     const outputPath =
       path.join(
@@ -421,14 +608,28 @@ async function renderVideo(
         `${jobId}.mp4`
       );
 
+
     console.log(
-      `[${jobId}] starting ffmpeg video render`
+      `[${jobId}] starting HIGH QUALITY ffmpeg video render`
     );
+
+    console.log(
+      `[${jobId}] output = 1920x1080 / 30fps / CRF18`
+    );
+
+
+    // ==================================================
+    // HIGH QUALITY FFMPEG
+    // ==================================================
 
     await execFileAsync(
       'ffmpeg',
       [
         '-y',
+
+        // ------------------------------
+        // IMAGE INPUT
+        // ------------------------------
 
         '-f',
         'concat',
@@ -439,36 +640,93 @@ async function renderVideo(
         '-i',
         concatPath,
 
+
+        // ------------------------------
+        // AUDIO INPUT
+        // ------------------------------
+
         '-i',
         finalAudioPath,
 
+
+        // ------------------------------
+        // VIDEO FILTER
+        // ------------------------------
+
         '-vf',
+
         [
-          'scale=1280:720:force_original_aspect_ratio=decrease',
-          'pad=1280:720:(ow-iw)/2:(oh-ih)/2',
+          // Convert all images to 1080p
+          'scale=1920:1080:force_original_aspect_ratio=decrease',
+
+          // Black padding if aspect ratio differs
+          'pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
+
+          // Better resizing algorithm
+          'setsar=1',
+
+          // Standard YouTube pixel format
           'format=yuv420p',
+
         ].join(','),
 
+
+        // ------------------------------
+        // FRAME RATE
+        // ------------------------------
+
         '-r',
-        '24',
+        '30',
+
+
+        // ------------------------------
+        // VIDEO ENCODER
+        // ------------------------------
 
         '-c:v',
         'libx264',
 
+
+        // Render Free is CPU limited.
+        // fast gives much better quality than ultrafast,
+        // while still being more reliable than medium.
         '-preset',
-        'ultrafast',
+        'fast',
 
+
+        // CRF:
+        // 18 = visually near-lossless for YouTube source
         '-crf',
-        '30',
+        '18',
 
-        '-threads',
-        '1',
+
+        '-profile:v',
+        'high',
+
+        '-level',
+        '4.1',
+
+
+        // ------------------------------
+        // AUDIO
+        // ------------------------------
 
         '-c:a',
         'aac',
 
         '-b:a',
-        '128k',
+        '192k',
+
+        '-ar',
+        '48000',
+
+        '-ac',
+        '2',
+
+
+        // ------------------------------
+        // OUTPUT CONTROL
+        // ------------------------------
 
         '-shortest',
 
@@ -479,40 +737,112 @@ async function renderVideo(
       ],
       {
         maxBuffer:
-          1024 * 1024 * 50,
+          1024 * 1024 * 100,
       }
     );
+
 
     console.log(
       `[${jobId}] ffmpeg completed`
     );
 
-    updateJob(jobId, {
-      status: 'completed',
-      outputPath,
-      completedAt:
-        new Date().toISOString(),
-    });
+
+    // ==================================================
+    // VERIFY OUTPUT
+    // ==================================================
+
+    if (
+      !fs.existsSync(
+        outputPath
+      )
+    ) {
+      throw new Error(
+        'FFmpeg completed but output file does not exist'
+      );
+    }
+
+
+    const outputSize =
+      fs.statSync(
+        outputPath
+      ).size;
+
+
+    if (
+      outputSize < 100000
+    ) {
+      throw new Error(
+        `Output video is unexpectedly small: ${outputSize} bytes`
+      );
+    }
+
+
+    console.log(
+      `[${jobId}] output size = ${(outputSize / 1024 / 1024).toFixed(2)} MB`
+    );
+
+
+    // ==================================================
+    // COMPLETED
+    // ==================================================
+
+    updateJob(
+      jobId,
+      {
+        status:
+          'completed',
+
+        outputPath,
+
+        completedAt:
+          new Date().toISOString(),
+
+        outputSize,
+      }
+    );
+
 
     console.log(
       `[${jobId}] render completed successfully`
     );
-  } catch (error) {
+  }
+
+
+  // ====================================================
+  // ERROR
+  // ====================================================
+
+  catch (error) {
     const errorText =
       error.stderr ||
       error.message ||
       String(error);
+
 
     console.error(
       `[${jobId}] Render error:`,
       errorText
     );
 
-    updateJob(jobId, {
-      status: 'failed',
-      error: errorText,
-    });
-  } finally {
+
+    updateJob(
+      jobId,
+      {
+        status:
+          'failed',
+
+        error:
+          errorText,
+      }
+    );
+  }
+
+
+  // ====================================================
+  // CLEANUP
+  // ====================================================
+
+  finally {
     try {
       fs.rmSync(
         workDir,
@@ -522,10 +852,13 @@ async function renderVideo(
         }
       );
 
+
       console.log(
         `[${jobId}] temp files cleaned`
       );
-    } catch (error) {
+    }
+
+    catch (error) {
       console.error(
         `[${jobId}] Cleanup error:`,
         error
@@ -534,61 +867,117 @@ async function renderVideo(
   }
 }
 
+
+// ======================================================
+// HEALTH CHECK
+// ======================================================
+
 app.get(
   '/',
   (req, res) => {
     res.json({
       status: 'ok',
+
       service:
         'n8n-ffmpeg-render',
+
+      video_quality:
+        '1080p',
+
+      fps:
+        30,
+
+      crf:
+        18,
     });
   }
 );
 
+
+// ======================================================
+// CREATE RENDER JOB
+// ======================================================
+
 app.post(
   '/render',
   checkApiKey,
+
   (req, res) => {
     const jobId =
       crypto.randomUUID();
+
 
     console.log(
       `[${jobId}] new render request received`
     );
 
-    saveJob(jobId, {
-      jobId,
-      status: 'queued',
-      error: null,
-      audioDuration: null,
-      sceneDuration: null,
-      createdAt:
-        new Date().toISOString(),
-    });
 
+    saveJob(
+      jobId,
+      {
+        jobId,
+
+        status:
+          'queued',
+
+        error:
+          null,
+
+        audioDuration:
+          null,
+
+        sceneDuration:
+          null,
+
+        outputSize:
+          null,
+
+        createdAt:
+          new Date().toISOString(),
+      }
+    );
+
+
+    // Run rendering asynchronously
     renderVideo(
       jobId,
       req.body
     );
 
-    res.status(202).json({
-      job_id: jobId,
-      status: 'queued',
-      status_url:
-        `/status/${jobId}`,
-      download_url:
-        `/download/${jobId}`,
-    });
+
+    res
+      .status(202)
+      .json({
+        job_id:
+          jobId,
+
+        status:
+          'queued',
+
+        status_url:
+          `/status/${jobId}`,
+
+        download_url:
+          `/download/${jobId}`,
+      });
   }
 );
+
+
+// ======================================================
+// CHECK JOB STATUS
+// ======================================================
 
 app.get(
   '/status/:jobId',
   checkApiKey,
+
   (req, res) => {
-    const job = loadJob(
-      req.params.jobId
-    );
+    const job =
+      loadJob(
+        req.params.jobId
+      );
+
 
     if (!job) {
       return res
@@ -599,31 +988,47 @@ app.get(
         });
     }
 
+
     res.json({
       job_id:
         req.params.jobId,
+
       status:
         job.status,
+
       error:
-        job.error ||
-        null,
+        job.error || null,
+
       audio_duration:
         job.audioDuration ??
         null,
+
       scene_duration:
         job.sceneDuration ??
+        null,
+
+      output_size:
+        job.outputSize ??
         null,
     });
   }
 );
 
+
+// ======================================================
+// DOWNLOAD VIDEO
+// ======================================================
+
 app.get(
   '/download/:jobId',
   checkApiKey,
+
   (req, res) => {
-    const job = loadJob(
-      req.params.jobId
-    );
+    const job =
+      loadJob(
+        req.params.jobId
+      );
+
 
     if (!job) {
       return res
@@ -633,6 +1038,7 @@ app.get(
             'Job not found',
         });
     }
+
 
     if (
       job.status !==
@@ -643,10 +1049,12 @@ app.get(
         .json({
           error:
             'Video is not ready',
+
           status:
             job.status,
         });
     }
+
 
     if (
       !job.outputPath ||
@@ -662,9 +1070,11 @@ app.get(
         });
     }
 
+
     console.log(
       `[${req.params.jobId}] download requested`
     );
+
 
     res.download(
       job.outputPath,
@@ -673,12 +1083,22 @@ app.get(
   }
 );
 
+
+// ======================================================
+// START SERVER
+// ======================================================
+
 app.listen(
   PORT,
   '0.0.0.0',
+
   () => {
     console.log(
       `Server running on port ${PORT}`
+    );
+
+    console.log(
+      'Video quality: 1920x1080 / 30fps / CRF18'
     );
   }
 );
