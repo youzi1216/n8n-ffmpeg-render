@@ -38,11 +38,14 @@ function loadJob(jobId) {
     return null;
   }
 
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  return JSON.parse(
+    fs.readFileSync(file, 'utf8')
+  );
 }
 
 function updateJob(jobId, changes) {
   const current = loadJob(jobId) || {};
+
   const updated = {
     ...current,
     ...changes,
@@ -50,6 +53,7 @@ function updateJob(jobId, changes) {
   };
 
   saveJob(jobId, updated);
+
   return updated;
 }
 
@@ -101,19 +105,35 @@ async function getAudioDuration(filePath) {
     ]
   );
 
-  const duration = parseFloat(stdout.trim());
+  const duration = parseFloat(
+    stdout.trim()
+  );
 
   if (!Number.isFinite(duration)) {
-    throw new Error('Unable to detect audio duration');
+    throw new Error(
+      'Unable to detect audio duration'
+    );
   }
 
   return duration;
 }
 
-async function mergeAudio(audioFiles, workDir) {
+async function mergeAudio(
+  audioFiles,
+  workDir,
+  jobId
+) {
   if (audioFiles.length === 1) {
+    console.log(
+      `[${jobId}] only one audio file, skip merge`
+    );
+
     return audioFiles[0];
   }
+
+  console.log(
+    `[${jobId}] merging ${audioFiles.length} audio files`
+  );
 
   const listPath = path.join(
     workDir,
@@ -131,7 +151,10 @@ async function mergeAudio(audioFiles, workDir) {
     content += `file '${file}'\n`;
   }
 
-  fs.writeFileSync(listPath, content);
+  fs.writeFileSync(
+    listPath,
+    content
+  );
 
   await execFileAsync(
     'ffmpeg',
@@ -150,17 +173,29 @@ async function mergeAudio(audioFiles, workDir) {
       mergedPath,
     ],
     {
-      maxBuffer: 1024 * 1024 * 20,
+      maxBuffer:
+        1024 * 1024 * 20,
     }
+  );
+
+  console.log(
+    `[${jobId}] audio merge completed`
   );
 
   return mergedPath;
 }
 
-async function renderVideo(jobId, payload) {
+async function renderVideo(
+  jobId,
+  payload
+) {
   const workDir = path.join(
     BASE_DIR,
     `work-${jobId}`
+  );
+
+  console.log(
+    `[${jobId}] render started`
   );
 
   try {
@@ -173,34 +208,62 @@ async function renderVideo(jobId, payload) {
       recursive: true,
     });
 
-    const scenes = Array.isArray(payload.scenes)
+    const scenes = Array.isArray(
+      payload.scenes
+    )
       ? payload.scenes
       : [];
 
     let audioParts = [];
 
-    if (Array.isArray(payload.audio_parts)) {
-      audioParts = payload.audio_parts;
-    } else if (payload.audio_url) {
+    if (
+      Array.isArray(
+        payload.audio_parts
+      )
+    ) {
+      audioParts =
+        payload.audio_parts;
+    } else if (
+      payload.audio_url
+    ) {
       audioParts = [
         {
           part_index: 1,
-          audio_url: payload.audio_url,
+          audio_url:
+            payload.audio_url,
         },
       ];
     }
 
+    console.log(
+      `[${jobId}] scenes = ${scenes.length}`
+    );
+
+    console.log(
+      `[${jobId}] audio parts = ${audioParts.length}`
+    );
+
     if (scenes.length === 0) {
-      throw new Error('No scenes were provided');
+      throw new Error(
+        'No scenes were provided'
+      );
     }
 
-    if (audioParts.length === 0) {
-      throw new Error('No audio was provided');
+    if (
+      audioParts.length === 0
+    ) {
+      throw new Error(
+        'No audio was provided'
+      );
     }
 
     const imageFiles = [];
 
-    for (let i = 0; i < scenes.length; i++) {
+    for (
+      let i = 0;
+      i < scenes.length;
+      i++
+    ) {
       const scene = scenes[i];
 
       if (!scene.image_url) {
@@ -209,23 +272,44 @@ async function renderVideo(jobId, payload) {
         );
       }
 
-      const imagePath = path.join(
-        workDir,
-        `scene_${String(i + 1).padStart(3, '0')}.jpg`
+      console.log(
+        `[${jobId}] downloading image ${i + 1}/${scenes.length}`
       );
+
+      const imagePath =
+        path.join(
+          workDir,
+          `scene_${String(
+            i + 1
+          ).padStart(
+            3,
+            '0'
+          )}.jpg`
+        );
 
       await downloadFile(
         scene.image_url,
         imagePath
       );
 
-      imageFiles.push(imagePath);
+      imageFiles.push(
+        imagePath
+      );
     }
+
+    console.log(
+      `[${jobId}] all images downloaded`
+    );
 
     const audioFiles = [];
 
-    for (let i = 0; i < audioParts.length; i++) {
-      const audio = audioParts[i];
+    for (
+      let i = 0;
+      i < audioParts.length;
+      i++
+    ) {
+      const audio =
+        audioParts[i];
 
       if (!audio.audio_url) {
         throw new Error(
@@ -233,59 +317,112 @@ async function renderVideo(jobId, payload) {
         );
       }
 
-      const audioPath = path.join(
-        workDir,
-        `audio_${String(i + 1).padStart(3, '0')}.mp3`
+      console.log(
+        `[${jobId}] downloading audio ${i + 1}/${audioParts.length}`
       );
+
+      const audioPath =
+        path.join(
+          workDir,
+          `audio_${String(
+            i + 1
+          ).padStart(
+            3,
+            '0'
+          )}.mp3`
+        );
 
       await downloadFile(
         audio.audio_url,
         audioPath
       );
 
-      audioFiles.push(audioPath);
+      audioFiles.push(
+        audioPath
+      );
     }
 
-    const finalAudioPath = await mergeAudio(
-      audioFiles,
-      workDir
+    console.log(
+      `[${jobId}] all audio files downloaded`
+    );
+
+    console.log(
+      `[${jobId}] preparing final audio`
+    );
+
+    const finalAudioPath =
+      await mergeAudio(
+        audioFiles,
+        workDir,
+        jobId
+      );
+
+    console.log(
+      `[${jobId}] reading audio duration`
     );
 
     const totalAudioDuration =
-      await getAudioDuration(finalAudioPath);
+      await getAudioDuration(
+        finalAudioPath
+      );
 
     const sceneDuration =
-      totalAudioDuration / imageFiles.length;
+      totalAudioDuration /
+      imageFiles.length;
+
+    console.log(
+      `[${jobId}] audio duration = ${totalAudioDuration}`
+    );
+
+    console.log(
+      `[${jobId}] scene duration = ${sceneDuration}`
+    );
 
     updateJob(jobId, {
-      audioDuration: totalAudioDuration,
+      audioDuration:
+        totalAudioDuration,
       sceneDuration,
     });
 
-    const concatPath = path.join(
-      workDir,
-      'images.txt'
-    );
+    const concatPath =
+      path.join(
+        workDir,
+        'images.txt'
+      );
 
     let concatText = '';
 
-    for (const imageFile of imageFiles) {
-      concatText += `file '${imageFile}'\n`;
-      concatText += `duration ${sceneDuration}\n`;
+    for (
+      const imageFile
+      of imageFiles
+    ) {
+      concatText +=
+        `file '${imageFile}'\n`;
+
+      concatText +=
+        `duration ${sceneDuration}\n`;
     }
 
-    concatText += `file '${
-      imageFiles[imageFiles.length - 1]
-    }'\n`;
+    concatText +=
+      `file '${
+        imageFiles[
+          imageFiles.length - 1
+        ]
+      }'\n`;
 
     fs.writeFileSync(
       concatPath,
       concatText
     );
 
-    const outputPath = path.join(
-      OUTPUT_DIR,
-      `${jobId}.mp4`
+    const outputPath =
+      path.join(
+        OUTPUT_DIR,
+        `${jobId}.mp4`
+      );
+
+    console.log(
+      `[${jobId}] starting ffmpeg video render`
     );
 
     await execFileAsync(
@@ -295,8 +432,10 @@ async function renderVideo(jobId, payload) {
 
         '-f',
         'concat',
+
         '-safe',
         '0',
+
         '-i',
         concatPath,
 
@@ -339,8 +478,13 @@ async function renderVideo(jobId, payload) {
         outputPath,
       ],
       {
-        maxBuffer: 1024 * 1024 * 50,
+        maxBuffer:
+          1024 * 1024 * 50,
       }
+    );
+
+    console.log(
+      `[${jobId}] ffmpeg completed`
     );
 
     updateJob(jobId, {
@@ -350,46 +494,67 @@ async function renderVideo(jobId, payload) {
         new Date().toISOString(),
     });
 
+    console.log(
+      `[${jobId}] render completed successfully`
+    );
   } catch (error) {
+    const errorText =
+      error.stderr ||
+      error.message ||
+      String(error);
+
     console.error(
-      'Render error:',
-      error
+      `[${jobId}] Render error:`,
+      errorText
     );
 
     updateJob(jobId, {
       status: 'failed',
-      error:
-        error.stderr ||
-        error.message ||
-        String(error),
+      error: errorText,
     });
   } finally {
     try {
-      fs.rmSync(workDir, {
-        recursive: true,
-        force: true,
-      });
+      fs.rmSync(
+        workDir,
+        {
+          recursive: true,
+          force: true,
+        }
+      );
+
+      console.log(
+        `[${jobId}] temp files cleaned`
+      );
     } catch (error) {
       console.error(
-        'Cleanup error:',
+        `[${jobId}] Cleanup error:`,
         error
       );
     }
   }
 }
 
-app.get('/', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'n8n-ffmpeg-render',
-  });
-});
+app.get(
+  '/',
+  (req, res) => {
+    res.json({
+      status: 'ok',
+      service:
+        'n8n-ffmpeg-render',
+    });
+  }
+);
 
 app.post(
   '/render',
   checkApiKey,
   (req, res) => {
-    const jobId = crypto.randomUUID();
+    const jobId =
+      crypto.randomUUID();
+
+    console.log(
+      `[${jobId}] new render request received`
+    );
 
     saveJob(jobId, {
       jobId,
@@ -409,7 +574,8 @@ app.post(
     res.status(202).json({
       job_id: jobId,
       status: 'queued',
-      status_url: `/status/${jobId}`,
+      status_url:
+        `/status/${jobId}`,
       download_url:
         `/download/${jobId}`,
     });
@@ -425,19 +591,28 @@ app.get(
     );
 
     if (!job) {
-      return res.status(404).json({
-        error: 'Job not found',
-      });
+      return res
+        .status(404)
+        .json({
+          error:
+            'Job not found',
+        });
     }
 
     res.json({
-      job_id: req.params.jobId,
-      status: job.status,
-      error: job.error || null,
+      job_id:
+        req.params.jobId,
+      status:
+        job.status,
+      error:
+        job.error ||
+        null,
       audio_duration:
-        job.audioDuration ?? null,
+        job.audioDuration ??
+        null,
       scene_duration:
-        job.sceneDuration ?? null,
+        job.sceneDuration ??
+        null,
     });
   }
 );
@@ -451,28 +626,45 @@ app.get(
     );
 
     if (!job) {
-      return res.status(404).json({
-        error: 'Job not found',
-      });
+      return res
+        .status(404)
+        .json({
+          error:
+            'Job not found',
+        });
     }
 
     if (
-      job.status !== 'completed'
+      job.status !==
+      'completed'
     ) {
-      return res.status(409).json({
-        error: 'Video is not ready',
-        status: job.status,
-      });
+      return res
+        .status(409)
+        .json({
+          error:
+            'Video is not ready',
+          status:
+            job.status,
+        });
     }
 
     if (
       !job.outputPath ||
-      !fs.existsSync(job.outputPath)
+      !fs.existsSync(
+        job.outputPath
+      )
     ) {
-      return res.status(404).json({
-        error: 'Video file not found',
-      });
+      return res
+        .status(404)
+        .json({
+          error:
+            'Video file not found',
+        });
     }
+
+    console.log(
+      `[${req.params.jobId}] download requested`
+    );
 
     res.download(
       job.outputPath,
