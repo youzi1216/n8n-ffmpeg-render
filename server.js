@@ -13,10 +13,50 @@ app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY || '';
 
-const jobs = new Map();
+const BASE_DIR = '/tmp/n8n-render';
+const JOB_DIR = path.join(BASE_DIR, 'jobs');
+const OUTPUT_DIR = path.join(BASE_DIR, 'outputs');
+
+fs.mkdirSync(JOB_DIR, { recursive: true });
+fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+
+function jobFile(jobId) {
+  return path.join(JOB_DIR, `${jobId}.json`);
+}
+
+function saveJob(jobId, data) {
+  fs.writeFileSync(
+    jobFile(jobId),
+    JSON.stringify(data, null, 2)
+  );
+}
+
+function loadJob(jobId) {
+  const file = jobFile(jobId);
+
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function updateJob(jobId, changes) {
+  const current = loadJob(jobId) || {};
+  const updated = {
+    ...current,
+    ...changes,
+    updatedAt: new Date().toISOString(),
+  };
+
+  saveJob(jobId, updated);
+  return updated;
+}
 
 function checkApiKey(req, res, next) {
-  if (!API_KEY) return next();
+  if (!API_KEY) {
+    return next();
+  }
 
   const key = req.headers['x-api-key'];
 
@@ -40,20 +80,26 @@ async function downloadFile(url, outputPath) {
     );
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = Buffer.from(
+    await response.arrayBuffer()
+  );
+
   fs.writeFileSync(outputPath, buffer);
 }
 
 async function getAudioDuration(filePath) {
-  const { stdout } = await execFileAsync('ffprobe', [
-    '-v',
-    'error',
-    '-show_entries',
-    'format=duration',
-    '-of',
-    'default=noprint_wrappers=1:nokey=1',
-    filePath,
-  ]);
+  const { stdout } = await execFileAsync(
+    'ffprobe',
+    [
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'default=noprint_wrappers=1:nokey=1',
+      filePath,
+    ]
+  );
 
   const duration = parseFloat(stdout.trim());
 
@@ -64,11 +110,68 @@ async function getAudioDuration(filePath) {
   return duration;
 }
 
+async function mergeAudio(audioFiles, workDir) {
+  if (audioFiles.length === 1) {
+    return audioFiles[0];
+  }
+
+  const listPath = path.join(
+    workDir,
+    'audio-list.txt'
+  );
+
+  const mergedPath = path.join(
+    workDir,
+    'merged-audio.m4a'
+  );
+
+  let content = '';
+
+  for (const file of audioFiles) {
+    content += `file '${file}'\n`;
+  }
+
+  fs.writeFileSync(listPath, content);
+
+  await execFileAsync(
+    'ffmpeg',
+    [
+      '-y',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      listPath,
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      mergedPath,
+    ],
+    {
+      maxBuffer: 1024 * 1024 * 20,
+    }
+  );
+
+  return mergedPath;
+}
+
 async function renderVideo(jobId, payload) {
-  const job = jobs.get(jobId);
+  const workDir = path.join(
+    BASE_DIR,
+    `work-${jobId}`
+  );
 
   try {
-    job.status = 'processing';
+    updateJob(jobId, {
+      status: 'processing',
+      error: null,
+    });
+
+    fs.mkdirSync(workDir, {
+      recursive: true,
+    });
 
     const scenes = Array.isArray(payload.scenes)
       ? payload.scenes
@@ -95,24 +198,26 @@ async function renderVideo(jobId, payload) {
       throw new Error('No audio was provided');
     }
 
-    const workDir = path.join('/tmp', `render-${jobId}`);
-    fs.mkdirSync(workDir, { recursive: true });
-
     const imageFiles = [];
 
     for (let i = 0; i < scenes.length; i++) {
       const scene = scenes[i];
 
       if (!scene.image_url) {
-        throw new Error(`Scene ${i + 1} has no image_url`);
+        throw new Error(
+          `Scene ${i + 1} has no image_url`
+        );
       }
 
       const imagePath = path.join(
         workDir,
-        `image_${String(i + 1).padStart(3, '0')}.jpg`
+        `scene_${String(i + 1).padStart(3, '0')}.jpg`
       );
 
-      await downloadFile(scene.image_url, imagePath);
+      await downloadFile(
+        scene.image_url,
+        imagePath
+      );
 
       imageFiles.push(imagePath);
     }
@@ -123,7 +228,9 @@ async function renderVideo(jobId, payload) {
       const audio = audioParts[i];
 
       if (!audio.audio_url) {
-        throw new Error(`Audio part ${i + 1} has no audio_url`);
+        throw new Error(
+          `Audio part ${i + 1} has no audio_url`
+        );
       }
 
       const audioPath = path.join(
@@ -131,163 +238,143 @@ async function renderVideo(jobId, payload) {
         `audio_${String(i + 1).padStart(3, '0')}.mp3`
       );
 
-      await downloadFile(audio.audio_url, audioPath);
+      await downloadFile(
+        audio.audio_url,
+        audioPath
+      );
 
       audioFiles.push(audioPath);
     }
 
-    let totalAudioDuration = 0;
+    const finalAudioPath = await mergeAudio(
+      audioFiles,
+      workDir
+    );
 
-    for (const audioFile of audioFiles) {
-      totalAudioDuration += await getAudioDuration(audioFile);
-    }
+    const totalAudioDuration =
+      await getAudioDuration(finalAudioPath);
 
     const sceneDuration =
       totalAudioDuration / imageFiles.length;
 
-    const imageListPath = path.join(workDir, 'images.txt');
+    updateJob(jobId, {
+      audioDuration: totalAudioDuration,
+      sceneDuration,
+    });
 
-    let imageList = '';
-
-    for (const imageFile of imageFiles) {
-      imageList += `file '${imageFile}'\n`;
-      imageList += `duration ${sceneDuration}\n`;
-    }
-
-    imageList += `file '${imageFiles[imageFiles.length - 1]}'\n`;
-
-    fs.writeFileSync(imageListPath, imageList);
-
-    const slideshowPath = path.join(
+    const concatPath = path.join(
       workDir,
-      'slideshow.mp4'
+      'images.txt'
     );
 
-    await execFileAsync('ffmpeg', [
-      '-y',
-      '-f',
-      'concat',
-      '-safe',
-      '0',
-      '-i',
-      imageListPath,
+    let concatText = '';
 
-      '-vf',
-      'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
+    for (const imageFile of imageFiles) {
+      concatText += `file '${imageFile}'\n`;
+      concatText += `duration ${sceneDuration}\n`;
+    }
 
-      '-r',
-      '30',
+    concatText += `file '${
+      imageFiles[imageFiles.length - 1]
+    }'\n`;
 
-      '-c:v',
-      'libx264',
+    fs.writeFileSync(
+      concatPath,
+      concatText
+    );
 
-      '-preset',
-      'veryfast',
+    const outputPath = path.join(
+      OUTPUT_DIR,
+      `${jobId}.mp4`
+    );
 
-      '-movflags',
-      '+faststart',
-
-      slideshowPath,
-    ]);
-
-    let finalAudioInput;
-
-    if (audioFiles.length === 1) {
-      finalAudioInput = audioFiles[0];
-    } else {
-      const audioListPath = path.join(
-        workDir,
-        'audio.txt'
-      );
-
-      let audioList = '';
-
-      for (const audioFile of audioFiles) {
-        audioList += `file '${audioFile}'\n`;
-      }
-
-      fs.writeFileSync(audioListPath, audioList);
-
-      const mergedAudioPath = path.join(
-        workDir,
-        'merged_audio.m4a'
-      );
-
-      await execFileAsync('ffmpeg', [
+    await execFileAsync(
+      'ffmpeg',
+      [
         '-y',
+
         '-f',
         'concat',
         '-safe',
         '0',
         '-i',
-        audioListPath,
+        concatPath,
+
+        '-i',
+        finalAudioPath,
+
+        '-vf',
+        [
+          'scale=1280:720:force_original_aspect_ratio=decrease',
+          'pad=1280:720:(ow-iw)/2:(oh-ih)/2',
+          'format=yuv420p',
+        ].join(','),
+
+        '-r',
+        '24',
+
+        '-c:v',
+        'libx264',
+
+        '-preset',
+        'ultrafast',
+
+        '-crf',
+        '30',
+
+        '-threads',
+        '1',
 
         '-c:a',
         'aac',
 
         '-b:a',
-        '192k',
+        '128k',
 
-        mergedAudioPath,
-      ]);
+        '-shortest',
 
-      finalAudioInput = mergedAudioPath;
-    }
+        '-movflags',
+        '+faststart',
 
-    const finalVideoPath = path.join(
-      workDir,
-      'final_video.mp4'
+        outputPath,
+      ],
+      {
+        maxBuffer: 1024 * 1024 * 50,
+      }
     );
 
-    await execFileAsync('ffmpeg', [
-      '-y',
-
-      '-i',
-      slideshowPath,
-
-      '-i',
-      finalAudioInput,
-
-      '-c:v',
-      'copy',
-
-      '-c:a',
-      'aac',
-
-      '-b:a',
-      '192k',
-
-      '-shortest',
-
-      '-movflags',
-      '+faststart',
-
-      finalVideoPath,
-    ]);
-
-    job.status = 'completed';
-    job.outputPath = finalVideoPath;
-    job.audioDuration = totalAudioDuration;
-    job.sceneDuration = sceneDuration;
-
-    setTimeout(() => {
-      try {
-        fs.rmSync(workDir, {
-          recursive: true,
-          force: true,
-        });
-
-        jobs.delete(jobId);
-      } catch (error) {
-        console.error('Cleanup error:', error);
-      }
-    }, 2 * 60 * 60 * 1000);
+    updateJob(jobId, {
+      status: 'completed',
+      outputPath,
+      completedAt:
+        new Date().toISOString(),
+    });
 
   } catch (error) {
-    console.error(error);
+    console.error(
+      'Render error:',
+      error
+    );
 
-    job.status = 'failed';
-    job.error = error.message;
+    updateJob(jobId, {
+      status: 'failed',
+      error:
+        error.stderr ||
+        error.message ||
+        String(error),
+    });
+  } finally {
+    try {
+      fs.rmSync(workDir, {
+        recursive: true,
+        force: true,
+      });
+    } catch (error) {
+      console.error(
+        'Cleanup error:',
+        error
+      );
+    }
   }
 }
 
@@ -298,64 +385,108 @@ app.get('/', (req, res) => {
   });
 });
 
-app.post('/render', checkApiKey, (req, res) => {
-  const jobId = crypto.randomUUID();
+app.post(
+  '/render',
+  checkApiKey,
+  (req, res) => {
+    const jobId = crypto.randomUUID();
 
-  jobs.set(jobId, {
-    status: 'queued',
-    createdAt: new Date().toISOString(),
-  });
+    saveJob(jobId, {
+      jobId,
+      status: 'queued',
+      error: null,
+      audioDuration: null,
+      sceneDuration: null,
+      createdAt:
+        new Date().toISOString(),
+    });
 
-  renderVideo(jobId, req.body);
+    renderVideo(
+      jobId,
+      req.body
+    );
 
-  res.status(202).json({
-    job_id: jobId,
-    status: 'queued',
-    status_url: `/status/${jobId}`,
-    download_url: `/download/${jobId}`,
-  });
-});
-
-app.get('/status/:jobId', checkApiKey, (req, res) => {
-  const job = jobs.get(req.params.jobId);
-
-  if (!job) {
-    return res.status(404).json({
-      error: 'Job not found',
+    res.status(202).json({
+      job_id: jobId,
+      status: 'queued',
+      status_url: `/status/${jobId}`,
+      download_url:
+        `/download/${jobId}`,
     });
   }
+);
 
-  res.json({
-    job_id: req.params.jobId,
-    status: job.status,
-    error: job.error || null,
-    audio_duration: job.audioDuration || null,
-    scene_duration: job.sceneDuration || null,
-  });
-});
+app.get(
+  '/status/:jobId',
+  checkApiKey,
+  (req, res) => {
+    const job = loadJob(
+      req.params.jobId
+    );
 
-app.get('/download/:jobId', checkApiKey, (req, res) => {
-  const job = jobs.get(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({
+        error: 'Job not found',
+      });
+    }
 
-  if (!job) {
-    return res.status(404).json({
-      error: 'Job not found',
-    });
-  }
-
-  if (job.status !== 'completed') {
-    return res.status(409).json({
-      error: 'Video is not ready',
+    res.json({
+      job_id: req.params.jobId,
       status: job.status,
+      error: job.error || null,
+      audio_duration:
+        job.audioDuration ?? null,
+      scene_duration:
+        job.sceneDuration ?? null,
     });
   }
+);
 
-  res.download(
-    job.outputPath,
-    'final_video.mp4'
-  );
-});
+app.get(
+  '/download/:jobId',
+  checkApiKey,
+  (req, res) => {
+    const job = loadJob(
+      req.params.jobId
+    );
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-});
+    if (!job) {
+      return res.status(404).json({
+        error: 'Job not found',
+      });
+    }
+
+    if (
+      job.status !== 'completed'
+    ) {
+      return res.status(409).json({
+        error: 'Video is not ready',
+        status: job.status,
+      });
+    }
+
+    if (
+      !job.outputPath ||
+      !fs.existsSync(job.outputPath)
+    ) {
+      return res.status(404).json({
+        error: 'Video file not found',
+      });
+    }
+
+    res.download(
+      job.outputPath,
+      'final_video.mp4'
+    );
+  }
+);
+
+app.listen(
+  PORT,
+  '0.0.0.0',
+  () => {
+    console.log(
+      `Server running on port ${PORT}`
+    );
+  }
+);
