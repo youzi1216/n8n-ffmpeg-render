@@ -1098,7 +1098,7 @@ app.listen(
     );
 
     console.log(
-      'Video quality: 1920x1080 / 30fps / CRF18'
+      'Video quality: 1920x1080 / 30fps / CRF20'
     );
   }
 );
