@@ -11,24 +11,56 @@ const app = express();
 
 app.use(
   express.json({
-    limit: '10mb',
+    limit: '20mb',
   })
 );
 
-const PORT = process.env.PORT || 3000;
-const API_KEY = process.env.API_KEY || '';
+// ======================================================
+// ENVIRONMENT
+// ======================================================
 
-const BASE_DIR = '/tmp/n8n-render';
-const JOB_DIR = path.join(BASE_DIR, 'jobs');
-const OUTPUT_DIR = path.join(BASE_DIR, 'outputs');
+const PORT =
+  process.env.PORT || 3000;
 
-fs.mkdirSync(JOB_DIR, {
-  recursive: true,
-});
+const API_KEY =
+  process.env.API_KEY || '';
 
-fs.mkdirSync(OUTPUT_DIR, {
-  recursive: true,
-});
+const POLLINATIONS_API_KEY =
+  process.env.POLLINATIONS_API_KEY || '';
+
+
+// ======================================================
+// DIRECTORIES
+// ======================================================
+
+const BASE_DIR =
+  '/tmp/n8n-render';
+
+const JOB_DIR =
+  path.join(
+    BASE_DIR,
+    'jobs'
+  );
+
+const OUTPUT_DIR =
+  path.join(
+    BASE_DIR,
+    'outputs'
+  );
+
+fs.mkdirSync(
+  JOB_DIR,
+  {
+    recursive: true,
+  }
+);
+
+fs.mkdirSync(
+  OUTPUT_DIR,
+  {
+    recursive: true,
+  }
+);
 
 
 // ======================================================
@@ -43,7 +75,10 @@ function jobFile(jobId) {
 }
 
 
-function saveJob(jobId, data) {
+function saveJob(
+  jobId,
+  data
+) {
   fs.writeFileSync(
     jobFile(jobId),
     JSON.stringify(
@@ -56,18 +91,32 @@ function saveJob(jobId, data) {
 
 
 function loadJob(jobId) {
-  const file = jobFile(jobId);
+  const file =
+    jobFile(jobId);
 
-  if (!fs.existsSync(file)) {
+  if (
+    !fs.existsSync(file)
+  ) {
     return null;
   }
 
-  return JSON.parse(
-    fs.readFileSync(
-      file,
-      'utf8'
-    )
-  );
+  try {
+    return JSON.parse(
+      fs.readFileSync(
+        file,
+        'utf8'
+      )
+    );
+  }
+
+  catch (error) {
+    console.error(
+      `[${jobId}] Failed to read job:`,
+      error
+    );
+
+    return null;
+  }
 }
 
 
@@ -96,7 +145,7 @@ function updateJob(
 
 
 // ======================================================
-// API KEY
+// AUTH
 // ======================================================
 
 function checkApiKey(
@@ -109,13 +158,18 @@ function checkApiKey(
   }
 
   const key =
-    req.headers['x-api-key'];
+    req.headers[
+      'x-api-key'
+    ];
 
-  if (key !== API_KEY) {
+  if (
+    key !== API_KEY
+  ) {
     return res
       .status(401)
       .json({
-        error: 'Unauthorized',
+        error:
+          'Unauthorized',
       });
   }
 
@@ -124,7 +178,22 @@ function checkApiKey(
 
 
 // ======================================================
-// DOWNLOAD FILE
+// SMALL DELAY
+// ======================================================
+
+function sleep(ms) {
+  return new Promise(
+    resolve =>
+      setTimeout(
+        resolve,
+        ms
+      )
+  );
+}
+
+
+// ======================================================
+// DOWNLOAD EXISTING FILE
 // ======================================================
 
 async function downloadFile(
@@ -135,13 +204,25 @@ async function downloadFile(
     await fetch(
       url,
       {
-        redirect: 'follow',
+        method:
+          'GET',
+
+        redirect:
+          'follow',
       }
     );
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
+    const text =
+      await response.text();
+
     throw new Error(
-      `Download failed: ${response.status} ${response.statusText}`
+      `Download failed: ` +
+      `${response.status} ` +
+      `${response.statusText} ` +
+      `${text.slice(0, 300)}`
     );
   }
 
@@ -158,13 +239,252 @@ async function downloadFile(
 
 
 // ======================================================
+// POLLINATIONS IMAGE GENERATION
+// ======================================================
+
+async function generatePollinationsImage(
+  prompt,
+  outputPath,
+  sceneIndex,
+  jobId
+) {
+  if (
+    !POLLINATIONS_API_KEY
+  ) {
+    throw new Error(
+      'POLLINATIONS_API_KEY is missing in Render Environment'
+    );
+  }
+
+  if (
+    !prompt ||
+    typeof prompt !==
+      'string'
+  ) {
+    throw new Error(
+      `Scene ${sceneIndex} has invalid image_prompt`
+    );
+  }
+
+  // ----------------------------------------------------
+  // IMAGE SETTINGS
+  // ----------------------------------------------------
+
+  const width = 1536;
+  const height = 864;
+
+  const seed =
+    10000 +
+    Number(sceneIndex);
+
+
+  // ----------------------------------------------------
+  // EXTRA QUALITY / SAFETY PROMPT
+  // ----------------------------------------------------
+
+  const enhancedPrompt = `
+${prompt}
+
+Single coherent scene.
+One continuous composition.
+Professional cinematic composition.
+High visual fidelity.
+Highly detailed subject and environment.
+Natural realistic lighting.
+Realistic materials and textures.
+Sharp subject detail.
+Clean depth of field.
+Professional YouTube documentary visual style.
+16:9 widescreen composition.
+
+Do not create a collage.
+Do not create split screen.
+Do not create multiple panels.
+Do not create subtitles.
+Do not create captions.
+Do not create logos.
+Do not create watermarks.
+Do not create readable text.
+Do not create random letters.
+Do not create gibberish text.
+Do not create fake software interfaces.
+Do not create distorted user interfaces.
+Do not duplicate people.
+Do not duplicate objects.
+Avoid malformed hands.
+Avoid malformed faces.
+`.trim();
+
+
+  const encodedPrompt =
+    encodeURIComponent(
+      enhancedPrompt
+    );
+
+
+  const url =
+    `https://gen.pollinations.ai/image/${encodedPrompt}` +
+    `?model=flux` +
+    `&width=${width}` +
+    `&height=${height}` +
+    `&seed=${seed}` +
+    `&nologo=true`;
+
+
+  console.log(
+    `[${jobId}] Pollinations request scene ${sceneIndex}`
+  );
+
+
+  const response =
+    await fetch(
+      url,
+      {
+        method:
+          'GET',
+
+        headers: {
+          Authorization:
+            `Bearer ${POLLINATIONS_API_KEY}`,
+        },
+
+        redirect:
+          'follow',
+      }
+    );
+
+
+  if (
+    !response.ok
+  ) {
+    const text =
+      await response.text();
+
+    throw new Error(
+      `Pollinations failed for scene ${sceneIndex}: ` +
+      `${response.status} ` +
+      `${response.statusText} ` +
+      `${text.slice(0, 500)}`
+    );
+  }
+
+
+  const contentType =
+    response.headers.get(
+      'content-type'
+    ) || '';
+
+
+  if (
+    !contentType.startsWith(
+      'image/'
+    )
+  ) {
+    const text =
+      await response.text();
+
+    throw new Error(
+      `Pollinations returned non-image content for scene ${sceneIndex}: ` +
+      text.slice(
+        0,
+        500
+      )
+    );
+  }
+
+
+  const buffer =
+    Buffer.from(
+      await response.arrayBuffer()
+    );
+
+
+  if (
+    buffer.length <
+    10000
+  ) {
+    throw new Error(
+      `Generated image ${sceneIndex} is unexpectedly small: ${buffer.length} bytes`
+    );
+  }
+
+
+  fs.writeFileSync(
+    outputPath,
+    buffer
+  );
+
+
+  console.log(
+    `[${jobId}] image ${sceneIndex} generated ` +
+    `(${(
+      buffer.length /
+      1024
+    ).toFixed(1)} KB)`
+  );
+}
+
+
+// ======================================================
+// RETRY IMAGE GENERATION
+// ======================================================
+
+async function generateImageWithRetry(
+  prompt,
+  outputPath,
+  sceneIndex,
+  jobId
+) {
+  const maxAttempts = 3;
+
+  for (
+    let attempt = 1;
+    attempt <= maxAttempts;
+    attempt++
+  ) {
+    try {
+      await generatePollinationsImage(
+        prompt,
+        outputPath,
+        sceneIndex,
+        jobId
+      );
+
+      return;
+    }
+
+    catch (error) {
+      console.error(
+        `[${jobId}] scene ${sceneIndex} attempt ${attempt}/${maxAttempts} failed:`,
+        error.message
+      );
+
+      if (
+        attempt ===
+        maxAttempts
+      ) {
+        throw error;
+      }
+
+      await sleep(
+        attempt *
+          5000
+      );
+    }
+  }
+}
+
+
+// ======================================================
 // AUDIO DURATION
 // ======================================================
 
 async function getAudioDuration(
   filePath
 ) {
-  const { stdout } =
+  const {
+    stdout,
+  } =
     await execFileAsync(
       'ffprobe',
       [
@@ -178,16 +498,26 @@ async function getAudioDuration(
         'default=noprint_wrappers=1:nokey=1',
 
         filePath,
-      ]
+      ],
+      {
+        maxBuffer:
+          1024 *
+          1024 *
+          10,
+      }
     );
+
 
   const duration =
     parseFloat(
       stdout.trim()
     );
 
+
   if (
-    !Number.isFinite(duration)
+    !Number.isFinite(
+      duration
+    )
   ) {
     throw new Error(
       'Unable to detect audio duration'
@@ -217,9 +547,11 @@ async function mergeAudio(
     return audioFiles[0];
   }
 
+
   console.log(
     `[${jobId}] merging ${audioFiles.length} audio files`
   );
+
 
   const listPath =
     path.join(
@@ -227,25 +559,31 @@ async function mergeAudio(
       'audio-list.txt'
     );
 
+
   const mergedPath =
     path.join(
       workDir,
       'merged-audio.m4a'
     );
 
-  let content = '';
 
-  for (
-    const file of audioFiles
-  ) {
-    content +=
-      `file '${file}'\n`;
-  }
+  const content =
+    audioFiles
+      .map(
+        file =>
+          `file '${file.replace(
+            /'/g,
+            "'\\''"
+          )}'`
+      )
+      .join('\n');
+
 
   fs.writeFileSync(
     listPath,
     content
   );
+
 
   await execFileAsync(
     'ffmpeg',
@@ -260,6 +598,8 @@ async function mergeAudio(
 
       '-i',
       listPath,
+
+      '-vn',
 
       '-c:a',
       'aac',
@@ -277,13 +617,17 @@ async function mergeAudio(
     ],
     {
       maxBuffer:
-        1024 * 1024 * 30,
+        1024 *
+        1024 *
+        30,
     }
   );
+
 
   console.log(
     `[${jobId}] audio merge completed`
   );
+
 
   return mergedPath;
 }
@@ -303,30 +647,42 @@ async function renderVideo(
       `work-${jobId}`
     );
 
+
   console.log(
     `[${jobId}] render started`
   );
 
+
   try {
+
+    // --------------------------------------------------
+    // JOB STATUS
+    // --------------------------------------------------
+
     updateJob(
       jobId,
       {
-        status: 'processing',
-        error: null,
+        status:
+          'processing',
+
+        error:
+          null,
       }
     );
+
 
     fs.mkdirSync(
       workDir,
       {
-        recursive: true,
+        recursive:
+          true,
       }
     );
 
 
-    // ==================================================
-    // READ SCENES
-    // ==================================================
+    // --------------------------------------------------
+    // SCENES
+    // --------------------------------------------------
 
     const scenes =
       Array.isArray(
@@ -336,11 +692,12 @@ async function renderVideo(
         : [];
 
 
-    // ==================================================
-    // READ AUDIO
-    // ==================================================
+    // --------------------------------------------------
+    // AUDIO
+    // --------------------------------------------------
 
     let audioParts = [];
+
 
     if (
       Array.isArray(
@@ -356,7 +713,8 @@ async function renderVideo(
     ) {
       audioParts = [
         {
-          part_index: 1,
+          part_index:
+            1,
 
           audio_url:
             payload.audio_url,
@@ -368,6 +726,7 @@ async function renderVideo(
     console.log(
       `[${jobId}] scenes = ${scenes.length}`
     );
+
 
     console.log(
       `[${jobId}] audio parts = ${audioParts.length}`
@@ -393,56 +752,112 @@ async function renderVideo(
 
 
     // ==================================================
-    // DOWNLOAD IMAGES
+    // GENERATE / DOWNLOAD IMAGES
     // ==================================================
 
     const imageFiles = [];
 
+
     for (
       let i = 0;
-      i < scenes.length;
+      i <
+      scenes.length;
       i++
     ) {
       const scene =
         scenes[i];
 
-      if (
-        !scene.image_url
-      ) {
-        throw new Error(
-          `Scene ${i + 1} has no image_url`
-        );
-      }
 
-      console.log(
-        `[${jobId}] downloading image ${i + 1}/${scenes.length}`
-      );
+      const sceneIndex =
+        Number(
+          scene.scene_index ??
+          i + 1
+        );
+
 
       const imagePath =
         path.join(
           workDir,
 
           `scene_${String(
-            i + 1
+            sceneIndex
           ).padStart(
             3,
             '0'
           )}.jpg`
         );
 
-      await downloadFile(
-        scene.image_url,
-        imagePath
-      );
+
+      // -----------------------------------------------
+      // NEW MODE:
+      // DIRECT IMAGE GENERATION
+      // -----------------------------------------------
+
+      if (
+        scene.image_prompt
+      ) {
+        console.log(
+          `[${jobId}] generating image ${i + 1}/${scenes.length}`
+        );
+
+
+        await generateImageWithRetry(
+          scene.image_prompt,
+          imagePath,
+          sceneIndex,
+          jobId
+        );
+      }
+
+
+      // -----------------------------------------------
+      // OLD MODE:
+      // SUPPORT EXISTING IMAGE URL
+      // -----------------------------------------------
+
+      else if (
+        scene.image_url
+      ) {
+        console.log(
+          `[${jobId}] downloading legacy image ${i + 1}/${scenes.length}`
+        );
+
+
+        await downloadFile(
+          scene.image_url,
+          imagePath
+        );
+      }
+
+
+      else {
+        throw new Error(
+          `Scene ${sceneIndex} has neither image_prompt nor image_url`
+        );
+      }
+
 
       imageFiles.push(
         imagePath
       );
+
+
+      // Small pause between generations
+      // avoids hammering image API
+      if (
+        i <
+        scenes.length -
+          1
+      ) {
+        await sleep(
+          1500
+        );
+      }
     }
 
 
     console.log(
-      `[${jobId}] all images downloaded`
+      `[${jobId}] all images ready`
     );
 
 
@@ -452,13 +867,16 @@ async function renderVideo(
 
     const audioFiles = [];
 
+
     for (
       let i = 0;
-      i < audioParts.length;
+      i <
+      audioParts.length;
       i++
     ) {
       const audio =
         audioParts[i];
+
 
       if (
         !audio.audio_url
@@ -468,9 +886,11 @@ async function renderVideo(
         );
       }
 
+
       console.log(
         `[${jobId}] downloading audio ${i + 1}/${audioParts.length}`
       );
+
 
       const audioPath =
         path.join(
@@ -484,10 +904,12 @@ async function renderVideo(
           )}.mp3`
         );
 
+
       await downloadFile(
         audio.audio_url,
         audioPath
       );
+
 
       audioFiles.push(
         audioPath
@@ -508,6 +930,7 @@ async function renderVideo(
       `[${jobId}] preparing final audio`
     );
 
+
     const finalAudioPath =
       await mergeAudio(
         audioFiles,
@@ -515,6 +938,10 @@ async function renderVideo(
         jobId
       );
 
+
+    // ==================================================
+    // AUDIO DURATION
+    // ==================================================
 
     console.log(
       `[${jobId}] reading audio duration`
@@ -527,10 +954,6 @@ async function renderVideo(
       );
 
 
-    // ==================================================
-    // AUTOMATIC SCENE DURATION
-    // ==================================================
-
     const sceneDuration =
       totalAudioDuration /
       imageFiles.length;
@@ -539,6 +962,7 @@ async function renderVideo(
     console.log(
       `[${jobId}] audio duration = ${totalAudioDuration}`
     );
+
 
     console.log(
       `[${jobId}] scene duration = ${sceneDuration}`
@@ -558,7 +982,7 @@ async function renderVideo(
 
 
     // ==================================================
-    // CREATE IMAGE CONCAT FILE
+    // CREATE CONCAT FILE
     // ==================================================
 
     const concatPath =
@@ -583,11 +1007,12 @@ async function renderVideo(
     }
 
 
-    // FFmpeg concat requires last image repeated
+    // Repeat final image
     concatText +=
       `file '${
         imageFiles[
-          imageFiles.length - 1
+          imageFiles.length -
+            1
         ]
       }'\n`;
 
@@ -599,7 +1024,7 @@ async function renderVideo(
 
 
     // ==================================================
-    // OUTPUT PATH
+    // OUTPUT
     // ==================================================
 
     const outputPath =
@@ -613,13 +1038,14 @@ async function renderVideo(
       `[${jobId}] starting HIGH QUALITY ffmpeg video render`
     );
 
+
     console.log(
-      `[${jobId}] output = 1920x1080 / 30fps / CRF18`
+      `[${jobId}] output = 1920x1080 / 30fps / CRF20 / veryfast`
     );
 
 
     // ==================================================
-    // HIGH QUALITY FFMPEG
+    // FFMPEG
     // ==================================================
 
     await execFileAsync(
@@ -627,10 +1053,7 @@ async function renderVideo(
       [
         '-y',
 
-        // ------------------------------
         // IMAGE INPUT
-        // ------------------------------
-
         '-f',
         'concat',
 
@@ -641,76 +1064,52 @@ async function renderVideo(
         concatPath,
 
 
-        // ------------------------------
         // AUDIO INPUT
-        // ------------------------------
-
         '-i',
         finalAudioPath,
 
 
-        // ------------------------------
         // VIDEO FILTER
-        // ------------------------------
-
         '-vf',
 
         [
-          // Convert all images to 1080p
           'scale=1920:1080:force_original_aspect_ratio=decrease',
 
-          // Black padding if aspect ratio differs
           'pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
 
-          // Better resizing algorithm
           'setsar=1',
 
-          // Standard YouTube pixel format
           'format=yuv420p',
-
         ].join(','),
 
 
-        // ------------------------------
-        // FRAME RATE
-        // ------------------------------
-
+        // FPS
         '-r',
         '30',
 
 
-        // ------------------------------
-        // VIDEO ENCODER
-        // ------------------------------
-
+        // VIDEO CODEC
         '-c:v',
         'libx264',
 
 
-        // Render Free is CPU limited.
-        // fast gives much better quality than ultrafast,
-        // while still being more reliable than medium.
+        // IMPORTANT:
+        // Render Free = 512MB
+        // veryfast lowers CPU/RAM load
         '-preset',
-        'fast',
+        'veryfast',
 
 
-        // CRF:
-        // 18 = visually near-lossless for YouTube source
+        // Good visual quality
         '-crf',
-        '18',
+        '20',
 
 
         '-profile:v',
         'high',
 
-        '-level',
-        '4.1',
 
-
-        // ------------------------------
         // AUDIO
-        // ------------------------------
-
         '-c:a',
         'aac',
 
@@ -724,20 +1123,22 @@ async function renderVideo(
         '2',
 
 
-        // ------------------------------
-        // OUTPUT CONTROL
-        // ------------------------------
-
+        // Keep output close to audio duration
         '-shortest',
 
+
+        // Better web playback
         '-movflags',
         '+faststart',
+
 
         outputPath,
       ],
       {
         maxBuffer:
-          1024 * 1024 * 100,
+          1024 *
+          1024 *
+          100,
       }
     );
 
@@ -748,7 +1149,7 @@ async function renderVideo(
 
 
     // ==================================================
-    // VERIFY OUTPUT
+    // VERIFY VIDEO
     // ==================================================
 
     if (
@@ -757,7 +1158,7 @@ async function renderVideo(
       )
     ) {
       throw new Error(
-        'FFmpeg completed but output file does not exist'
+        'FFmpeg finished but output file does not exist'
       );
     }
 
@@ -769,7 +1170,8 @@ async function renderVideo(
 
 
     if (
-      outputSize < 100000
+      outputSize <
+      100000
     ) {
       throw new Error(
         `Output video is unexpectedly small: ${outputSize} bytes`
@@ -778,12 +1180,18 @@ async function renderVideo(
 
 
     console.log(
-      `[${jobId}] output size = ${(outputSize / 1024 / 1024).toFixed(2)} MB`
+      `[${jobId}] output size = ${(
+        outputSize /
+        1024 /
+        1024
+      ).toFixed(
+        2
+      )} MB`
     );
 
 
     // ==================================================
-    // COMPLETED
+    // COMPLETE
     // ==================================================
 
     updateJob(
@@ -794,10 +1202,10 @@ async function renderVideo(
 
         outputPath,
 
+        outputSize,
+
         completedAt:
           new Date().toISOString(),
-
-        outputSize,
       }
     );
 
@@ -813,6 +1221,7 @@ async function renderVideo(
   // ====================================================
 
   catch (error) {
+
     const errorText =
       error.stderr ||
       error.message ||
@@ -832,23 +1241,33 @@ async function renderVideo(
           'failed',
 
         error:
-          errorText,
+          String(
+            errorText
+          ).slice(
+            0,
+            20000
+          ),
       }
     );
   }
 
 
   // ====================================================
-  // CLEANUP
+  // CLEAN TEMP FILES
   // ====================================================
 
   finally {
+
     try {
+
       fs.rmSync(
         workDir,
         {
-          recursive: true,
-          force: true,
+          recursive:
+            true,
+
+          force:
+            true,
         }
       );
 
@@ -859,6 +1278,7 @@ async function renderVideo(
     }
 
     catch (error) {
+
       console.error(
         `[${jobId}] Cleanup error:`,
         error
@@ -874,21 +1294,34 @@ async function renderVideo(
 
 app.get(
   '/',
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
+
     res.json({
-      status: 'ok',
+      status:
+        'ok',
 
       service:
         'n8n-ffmpeg-render',
 
+      pollinations:
+        POLLINATIONS_API_KEY
+          ? 'configured'
+          : 'missing',
+
       video_quality:
-        '1080p',
+        '1920x1080',
 
       fps:
         30,
 
+      preset:
+        'veryfast',
+
       crf:
-        18,
+        20,
     });
   }
 );
@@ -900,9 +1333,14 @@ app.get(
 
 app.post(
   '/render',
+
   checkApiKey,
 
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
+
     const jobId =
       crypto.randomUUID();
 
@@ -938,7 +1376,8 @@ app.post(
     );
 
 
-    // Run rendering asynchronously
+    // Do NOT await:
+    // n8n receives job immediately
     renderVideo(
       jobId,
       req.body
@@ -965,14 +1404,19 @@ app.post(
 
 
 // ======================================================
-// CHECK JOB STATUS
+// JOB STATUS
 // ======================================================
 
 app.get(
   '/status/:jobId',
+
   checkApiKey,
 
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
+
     const job =
       loadJob(
         req.params.jobId
@@ -980,6 +1424,7 @@ app.get(
 
 
     if (!job) {
+
       return res
         .status(404)
         .json({
@@ -997,7 +1442,8 @@ app.get(
         job.status,
 
       error:
-        job.error || null,
+        job.error ||
+        null,
 
       audio_duration:
         job.audioDuration ??
@@ -1016,14 +1462,19 @@ app.get(
 
 
 // ======================================================
-// DOWNLOAD VIDEO
+// DOWNLOAD FINAL VIDEO
 // ======================================================
 
 app.get(
   '/download/:jobId',
+
   checkApiKey,
 
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
+
     const job =
       loadJob(
         req.params.jobId
@@ -1031,6 +1482,7 @@ app.get(
 
 
     if (!job) {
+
       return res
         .status(404)
         .json({
@@ -1044,6 +1496,7 @@ app.get(
       job.status !==
       'completed'
     ) {
+
       return res
         .status(409)
         .json({
@@ -1062,6 +1515,7 @@ app.get(
         job.outputPath
       )
     ) {
+
       return res
         .status(404)
         .json({
@@ -1085,7 +1539,7 @@ app.get(
 
 
 // ======================================================
-// START SERVER
+// START
 // ======================================================
 
 app.listen(
@@ -1093,12 +1547,23 @@ app.listen(
   '0.0.0.0',
 
   () => {
+
     console.log(
       `Server running on port ${PORT}`
     );
 
+
     console.log(
-      'Video quality: 1920x1080 / 30fps / CRF20'
+      'Video quality: 1920x1080 / 30fps / CRF20 / veryfast'
+    );
+
+
+    console.log(
+      `Pollinations API: ${
+        POLLINATIONS_API_KEY
+          ? 'configured'
+          : 'MISSING'
+      }`
     );
   }
 );
