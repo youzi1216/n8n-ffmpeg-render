@@ -25,9 +25,14 @@ const PORT =
 const API_KEY =
   process.env.API_KEY || '';
 
-const POLLINATIONS_API_KEY =
-  process.env.POLLINATIONS_API_KEY || '';
+const CLOUDFLARE_ACCOUNT_ID =
+  process.env.CLOUDFLARE_ACCOUNT_ID || '';
 
+const CLOUDFLARE_API_TOKEN =
+  process.env.CLOUDFLARE_API_TOKEN || '';
+
+const CLOUDFLARE_MODEL =
+  '@cf/black-forest-labs/flux-1-schnell';
 
 // ======================================================
 // DIRECTORIES
@@ -62,7 +67,6 @@ fs.mkdirSync(
   }
 );
 
-
 // ======================================================
 // JOB STORAGE
 // ======================================================
@@ -73,7 +77,6 @@ function jobFile(jobId) {
     `${jobId}.json`
   );
 }
-
 
 function saveJob(
   jobId,
@@ -88,7 +91,6 @@ function saveJob(
     )
   );
 }
-
 
 function loadJob(jobId) {
   const file =
@@ -107,9 +109,7 @@ function loadJob(jobId) {
         'utf8'
       )
     );
-  }
-
-  catch (error) {
+  } catch (error) {
     console.error(
       `[${jobId}] Failed to read job:`,
       error
@@ -118,7 +118,6 @@ function loadJob(jobId) {
     return null;
   }
 }
-
 
 function updateJob(
   jobId,
@@ -130,7 +129,6 @@ function updateJob(
   const updated = {
     ...current,
     ...changes,
-
     updatedAt:
       new Date().toISOString(),
   };
@@ -142,7 +140,6 @@ function updateJob(
 
   return updated;
 }
-
 
 // ======================================================
 // AUTH
@@ -158,9 +155,7 @@ function checkApiKey(
   }
 
   const key =
-    req.headers[
-      'x-api-key'
-    ];
+    req.headers['x-api-key'];
 
   if (
     key !== API_KEY
@@ -176,9 +171,8 @@ function checkApiKey(
   next();
 }
 
-
 // ======================================================
-// SMALL DELAY
+// HELPERS
 // ======================================================
 
 function sleep(ms) {
@@ -191,11 +185,6 @@ function sleep(ms) {
   );
 }
 
-
-// ======================================================
-// DOWNLOAD EXISTING FILE
-// ======================================================
-
 async function downloadFile(
   url,
   outputPath
@@ -206,7 +195,6 @@ async function downloadFile(
       {
         method:
           'GET',
-
         redirect:
           'follow',
       }
@@ -219,10 +207,7 @@ async function downloadFile(
       await response.text();
 
     throw new Error(
-      `Download failed: ` +
-      `${response.status} ` +
-      `${response.statusText} ` +
-      `${text.slice(0, 300)}`
+      `Download failed: ${response.status} ${response.statusText} ${text.slice(0, 300)}`
     );
   }
 
@@ -237,122 +222,141 @@ async function downloadFile(
   );
 }
 
-
 // ======================================================
-// POLLINATIONS IMAGE GENERATION
+// CLOUDFLARE IMAGE GENERATION
 // ======================================================
 
-async function generatePollinationsImage(
+function buildEnhancedPrompt(
+  prompt
+) {
+  const base =
+    typeof prompt === 'string'
+      ? prompt.trim()
+      : '';
+
+  if (!base) {
+    return '';
+  }
+
+  return `
+${base}
+
+Single coherent cinematic scene.
+Professional composition.
+Highly detailed subject and environment.
+Realistic materials and textures.
+Natural realistic lighting.
+Sharp focal subject.
+Clean depth of field.
+Professional YouTube documentary style.
+16:9 widescreen visual composition.
+
+No collage.
+No split screen.
+No multiple panels.
+No subtitles.
+No captions.
+No logo.
+No watermark.
+No readable text.
+No random letters.
+No gibberish text.
+No fake software interface.
+No duplicate people.
+No duplicate objects.
+Avoid malformed hands.
+Avoid malformed faces.
+`.trim();
+}
+
+async function generateCloudflareImage(
   prompt,
   outputPath,
   sceneIndex,
   jobId
 ) {
   if (
-    !POLLINATIONS_API_KEY
+    !CLOUDFLARE_ACCOUNT_ID
   ) {
     throw new Error(
-      'POLLINATIONS_API_KEY is missing in Render Environment'
+      'CLOUDFLARE_ACCOUNT_ID is missing'
     );
   }
 
   if (
-    !prompt ||
-    typeof prompt !==
-      'string'
+    !CLOUDFLARE_API_TOKEN
   ) {
+    throw new Error(
+      'CLOUDFLARE_API_TOKEN is missing'
+    );
+  }
+
+  const enhancedPrompt =
+    buildEnhancedPrompt(
+      prompt
+    );
+
+  if (!enhancedPrompt) {
     throw new Error(
       `Scene ${sceneIndex} has invalid image_prompt`
     );
   }
 
-  // ----------------------------------------------------
-  // IMAGE SETTINGS
-  // ----------------------------------------------------
-
-  const width = 1536;
-  const height = 864;
+  // Cloudflare model prompt max is 2048 chars
+  const finalPrompt =
+    enhancedPrompt.slice(
+      0,
+      2000
+    );
 
   const seed =
     10000 +
     Number(sceneIndex);
 
-
-  // ----------------------------------------------------
-  // EXTRA QUALITY / SAFETY PROMPT
-  // ----------------------------------------------------
-
-  const enhancedPrompt = `
-${prompt}
-
-Single coherent scene.
-One continuous composition.
-Professional cinematic composition.
-High visual fidelity.
-Highly detailed subject and environment.
-Natural realistic lighting.
-Realistic materials and textures.
-Sharp subject detail.
-Clean depth of field.
-Professional YouTube documentary visual style.
-16:9 widescreen composition.
-
-Do not create a collage.
-Do not create split screen.
-Do not create multiple panels.
-Do not create subtitles.
-Do not create captions.
-Do not create logos.
-Do not create watermarks.
-Do not create readable text.
-Do not create random letters.
-Do not create gibberish text.
-Do not create fake software interfaces.
-Do not create distorted user interfaces.
-Do not duplicate people.
-Do not duplicate objects.
-Avoid malformed hands.
-Avoid malformed faces.
-`.trim();
-
-
-  const encodedPrompt =
-    encodeURIComponent(
-      enhancedPrompt
-    );
-
-
   const url =
-    `https://gen.pollinations.ai/image/${encodedPrompt}` +
-    `?model=flux` +
-    `&width=${width}` +
-    `&height=${height}` +
-    `&seed=${seed}` +
-    `&nologo=true`;
-
+    `https://api.cloudflare.com/client/v4/accounts/` +
+    `${CLOUDFLARE_ACCOUNT_ID}` +
+    `/ai/run/` +
+    `${CLOUDFLARE_MODEL}`;
 
   console.log(
-    `[${jobId}] Pollinations request scene ${sceneIndex}`
+    `[${jobId}] Cloudflare request scene ${sceneIndex}`
   );
-
 
   const response =
     await fetch(
       url,
       {
         method:
-          'GET',
+          'POST',
 
         headers: {
           Authorization:
-            `Bearer ${POLLINATIONS_API_KEY}`,
+            `Bearer ${CLOUDFLARE_API_TOKEN}`,
+
+          'Content-Type':
+            'application/json',
         },
 
-        redirect:
-          'follow',
+        body:
+          JSON.stringify({
+            prompt:
+              finalPrompt,
+
+            seed,
+
+            // Official range max 8.
+            // 6 gives better quality than default 4
+            // while still keeping free-tier usage reasonable.
+            steps: 6,
+          }),
       }
     );
 
+  const contentType =
+    response.headers.get(
+      'content-type'
+    ) || '';
 
   if (
     !response.ok
@@ -361,73 +365,100 @@ Avoid malformed faces.
       await response.text();
 
     throw new Error(
-      `Pollinations failed for scene ${sceneIndex}: ` +
-      `${response.status} ` +
-      `${response.statusText} ` +
-      `${text.slice(0, 500)}`
+      `Cloudflare image generation failed for scene ${sceneIndex}: ` +
+      `${response.status} ${response.statusText} ${text.slice(0, 1000)}`
     );
   }
 
+  let imageBuffer = null;
 
-  const contentType =
-    response.headers.get(
-      'content-type'
-    ) || '';
-
+  // ====================================================
+  // Normal Workers AI REST response:
+  // {
+  //   success: true,
+  //   result: {
+  //     image: "BASE64..."
+  //   }
+  // }
+  // ====================================================
 
   if (
-    !contentType.startsWith(
+    contentType.includes(
+      'application/json'
+    )
+  ) {
+    const data =
+      await response.json();
+
+    const base64Image =
+      data?.result?.image ||
+      data?.image ||
+      null;
+
+    if (
+      !base64Image ||
+      typeof base64Image !==
+        'string'
+    ) {
+      throw new Error(
+        `Cloudflare returned no image for scene ${sceneIndex}: ` +
+        JSON.stringify(data).slice(
+          0,
+          1000
+        )
+      );
+    }
+
+    imageBuffer =
+      Buffer.from(
+        base64Image,
+        'base64'
+      );
+  } else if (
+    contentType.startsWith(
       'image/'
     )
   ) {
+    imageBuffer =
+      Buffer.from(
+        await response.arrayBuffer()
+      );
+  } else {
     const text =
       await response.text();
 
     throw new Error(
-      `Pollinations returned non-image content for scene ${sceneIndex}: ` +
+      `Cloudflare returned unexpected content for scene ${sceneIndex}: ` +
       text.slice(
         0,
-        500
+        1000
       )
     );
   }
 
-
-  const buffer =
-    Buffer.from(
-      await response.arrayBuffer()
-    );
-
-
   if (
-    buffer.length <
-    10000
+    !imageBuffer ||
+    imageBuffer.length <
+      10000
   ) {
     throw new Error(
-      `Generated image ${sceneIndex} is unexpectedly small: ${buffer.length} bytes`
+      `Generated image ${sceneIndex} is unexpectedly small`
     );
   }
 
-
   fs.writeFileSync(
     outputPath,
-    buffer
+    imageBuffer
   );
-
 
   console.log(
     `[${jobId}] image ${sceneIndex} generated ` +
     `(${(
-      buffer.length /
+      imageBuffer.length /
       1024
     ).toFixed(1)} KB)`
   );
 }
-
-
-// ======================================================
-// RETRY IMAGE GENERATION
-// ======================================================
 
 async function generateImageWithRetry(
   prompt,
@@ -443,7 +474,7 @@ async function generateImageWithRetry(
     attempt++
   ) {
     try {
-      await generatePollinationsImage(
+      await generateCloudflareImage(
         prompt,
         outputPath,
         sceneIndex,
@@ -451,9 +482,7 @@ async function generateImageWithRetry(
       );
 
       return;
-    }
-
-    catch (error) {
+    } catch (error) {
       console.error(
         `[${jobId}] scene ${sceneIndex} attempt ${attempt}/${maxAttempts} failed:`,
         error.message
@@ -473,7 +502,6 @@ async function generateImageWithRetry(
     }
   }
 }
-
 
 // ======================================================
 // AUDIO DURATION
@@ -507,12 +535,10 @@ async function getAudioDuration(
       }
     );
 
-
   const duration =
     parseFloat(
       stdout.trim()
     );
-
 
   if (
     !Number.isFinite(
@@ -526,7 +552,6 @@ async function getAudioDuration(
 
   return duration;
 }
-
 
 // ======================================================
 // MERGE AUDIO
@@ -547,11 +572,9 @@ async function mergeAudio(
     return audioFiles[0];
   }
 
-
   console.log(
     `[${jobId}] merging ${audioFiles.length} audio files`
   );
-
 
   const listPath =
     path.join(
@@ -559,13 +582,11 @@ async function mergeAudio(
       'audio-list.txt'
     );
 
-
   const mergedPath =
     path.join(
       workDir,
       'merged-audio.m4a'
     );
-
 
   const content =
     audioFiles
@@ -578,12 +599,10 @@ async function mergeAudio(
       )
       .join('\n');
 
-
   fs.writeFileSync(
     listPath,
     content
   );
-
 
   await execFileAsync(
     'ffmpeg',
@@ -623,15 +642,12 @@ async function mergeAudio(
     }
   );
 
-
   console.log(
     `[${jobId}] audio merge completed`
   );
 
-
   return mergedPath;
 }
-
 
 // ======================================================
 // MAIN VIDEO RENDER
@@ -647,18 +663,11 @@ async function renderVideo(
       `work-${jobId}`
     );
 
-
   console.log(
     `[${jobId}] render started`
   );
 
-
   try {
-
-    // --------------------------------------------------
-    // JOB STATUS
-    // --------------------------------------------------
-
     updateJob(
       jobId,
       {
@@ -670,7 +679,6 @@ async function renderVideo(
       }
     );
 
-
     fs.mkdirSync(
       workDir,
       {
@@ -679,10 +687,9 @@ async function renderVideo(
       }
     );
 
-
-    // --------------------------------------------------
+    // ==================================================
     // SCENES
-    // --------------------------------------------------
+    // ==================================================
 
     const scenes =
       Array.isArray(
@@ -691,13 +698,11 @@ async function renderVideo(
         ? payload.scenes
         : [];
 
-
-    // --------------------------------------------------
+    // ==================================================
     // AUDIO
-    // --------------------------------------------------
+    // ==================================================
 
     let audioParts = [];
-
 
     if (
       Array.isArray(
@@ -706,9 +711,7 @@ async function renderVideo(
     ) {
       audioParts =
         payload.audio_parts;
-    }
-
-    else if (
+    } else if (
       payload.audio_url
     ) {
       audioParts = [
@@ -722,16 +725,13 @@ async function renderVideo(
       ];
     }
 
-
     console.log(
       `[${jobId}] scenes = ${scenes.length}`
     );
 
-
     console.log(
       `[${jobId}] audio parts = ${audioParts.length}`
     );
-
 
     if (
       scenes.length === 0
@@ -741,7 +741,6 @@ async function renderVideo(
       );
     }
 
-
     if (
       audioParts.length === 0
     ) {
@@ -750,13 +749,11 @@ async function renderVideo(
       );
     }
 
-
     // ==================================================
-    // GENERATE / DOWNLOAD IMAGES
+    // GENERATE IMAGES
     // ==================================================
 
     const imageFiles = [];
-
 
     for (
       let i = 0;
@@ -767,13 +764,11 @@ async function renderVideo(
       const scene =
         scenes[i];
 
-
       const sceneIndex =
         Number(
           scene.scene_index ??
           i + 1
         );
-
 
       const imagePath =
         path.join(
@@ -787,19 +782,14 @@ async function renderVideo(
           )}.jpg`
         );
 
-
-      // -----------------------------------------------
-      // NEW MODE:
-      // DIRECT IMAGE GENERATION
-      // -----------------------------------------------
-
+      // NEW:
+      // Generate directly from Cloudflare
       if (
         scene.image_prompt
       ) {
         console.log(
           `[${jobId}] generating image ${i + 1}/${scenes.length}`
         );
-
 
         await generateImageWithRetry(
           scene.image_prompt,
@@ -809,12 +799,7 @@ async function renderVideo(
         );
       }
 
-
-      // -----------------------------------------------
-      // OLD MODE:
-      // SUPPORT EXISTING IMAGE URL
-      // -----------------------------------------------
-
+      // Legacy support
       else if (
         scene.image_url
       ) {
@@ -822,51 +807,41 @@ async function renderVideo(
           `[${jobId}] downloading legacy image ${i + 1}/${scenes.length}`
         );
 
-
         await downloadFile(
           scene.image_url,
           imagePath
         );
-      }
-
-
-      else {
+      } else {
         throw new Error(
           `Scene ${sceneIndex} has neither image_prompt nor image_url`
         );
       }
 
-
       imageFiles.push(
         imagePath
       );
 
-
-      // Small pause between generations
-      // avoids hammering image API
+      // Small pause to reduce API burst
       if (
         i <
         scenes.length -
           1
       ) {
         await sleep(
-          1500
+          1000
         );
       }
     }
 
-
     console.log(
       `[${jobId}] all images ready`
     );
-
 
     // ==================================================
     // DOWNLOAD AUDIO
     // ==================================================
 
     const audioFiles = [];
-
 
     for (
       let i = 0;
@@ -877,7 +852,6 @@ async function renderVideo(
       const audio =
         audioParts[i];
 
-
       if (
         !audio.audio_url
       ) {
@@ -886,11 +860,9 @@ async function renderVideo(
         );
       }
 
-
       console.log(
         `[${jobId}] downloading audio ${i + 1}/${audioParts.length}`
       );
-
 
       const audioPath =
         path.join(
@@ -904,23 +876,19 @@ async function renderVideo(
           )}.mp3`
         );
 
-
       await downloadFile(
         audio.audio_url,
         audioPath
       );
-
 
       audioFiles.push(
         audioPath
       );
     }
 
-
     console.log(
       `[${jobId}] all audio files downloaded`
     );
-
 
     // ==================================================
     // PREPARE AUDIO
@@ -930,14 +898,12 @@ async function renderVideo(
       `[${jobId}] preparing final audio`
     );
 
-
     const finalAudioPath =
       await mergeAudio(
         audioFiles,
         workDir,
         jobId
       );
-
 
     // ==================================================
     // AUDIO DURATION
@@ -947,27 +913,22 @@ async function renderVideo(
       `[${jobId}] reading audio duration`
     );
 
-
     const totalAudioDuration =
       await getAudioDuration(
         finalAudioPath
       );
 
-
     const sceneDuration =
       totalAudioDuration /
       imageFiles.length;
-
 
     console.log(
       `[${jobId}] audio duration = ${totalAudioDuration}`
     );
 
-
     console.log(
       `[${jobId}] scene duration = ${sceneDuration}`
     );
-
 
     updateJob(
       jobId,
@@ -980,7 +941,6 @@ async function renderVideo(
       }
     );
 
-
     // ==================================================
     // CREATE CONCAT FILE
     // ==================================================
@@ -991,9 +951,7 @@ async function renderVideo(
         'images.txt'
       );
 
-
     let concatText = '';
-
 
     for (
       const imageFile
@@ -1006,8 +964,6 @@ async function renderVideo(
         `duration ${sceneDuration}\n`;
     }
 
-
-    // Repeat final image
     concatText +=
       `file '${
         imageFiles[
@@ -1016,15 +972,13 @@ async function renderVideo(
         ]
       }'\n`;
 
-
     fs.writeFileSync(
       concatPath,
       concatText
     );
 
-
     // ==================================================
-    // OUTPUT
+    // OUTPUT PATH
     // ==================================================
 
     const outputPath =
@@ -1033,16 +987,13 @@ async function renderVideo(
         `${jobId}.mp4`
       );
 
-
     console.log(
-      `[${jobId}] starting HIGH QUALITY ffmpeg video render`
+      `[${jobId}] starting ffmpeg video render`
     );
 
-
     console.log(
-      `[${jobId}] output = 1920x1080 / 30fps / CRF20 / veryfast`
+      `[${jobId}] output = 1920x1080 / 30fps / CRF20 / veryfast / threads1`
     );
-
 
     // ==================================================
     // FFMPEG
@@ -1053,7 +1004,6 @@ async function renderVideo(
       [
         '-y',
 
-        // IMAGE INPUT
         '-f',
         'concat',
 
@@ -1063,13 +1013,9 @@ async function renderVideo(
         '-i',
         concatPath,
 
-
-        // AUDIO INPUT
         '-i',
         finalAudioPath,
 
-
-        // VIDEO FILTER
         '-vf',
 
         [
@@ -1082,34 +1028,26 @@ async function renderVideo(
           'format=yuv420p',
         ].join(','),
 
-
-        // FPS
         '-r',
         '30',
 
-
-        // VIDEO CODEC
         '-c:v',
         'libx264',
 
-
-        // IMPORTANT:
-        // Render Free = 512MB
-        // veryfast lowers CPU/RAM load
         '-preset',
         'veryfast',
 
-
-        // Good visual quality
         '-crf',
         '20',
 
+        // Render Free 512MB:
+        // limit encoder threads
+        '-threads',
+        '1',
 
         '-profile:v',
         'high',
 
-
-        // AUDIO
         '-c:a',
         'aac',
 
@@ -1122,15 +1060,10 @@ async function renderVideo(
         '-ac',
         '2',
 
-
-        // Keep output close to audio duration
         '-shortest',
 
-
-        // Better web playback
         '-movflags',
         '+faststart',
-
 
         outputPath,
       ],
@@ -1142,14 +1075,12 @@ async function renderVideo(
       }
     );
 
-
     console.log(
       `[${jobId}] ffmpeg completed`
     );
 
-
     // ==================================================
-    // VERIFY VIDEO
+    // VERIFY OUTPUT
     // ==================================================
 
     if (
@@ -1162,12 +1093,10 @@ async function renderVideo(
       );
     }
 
-
     const outputSize =
       fs.statSync(
         outputPath
       ).size;
-
 
     if (
       outputSize <
@@ -1178,17 +1107,13 @@ async function renderVideo(
       );
     }
 
-
     console.log(
       `[${jobId}] output size = ${(
         outputSize /
         1024 /
         1024
-      ).toFixed(
-        2
-      )} MB`
+      ).toFixed(2)} MB`
     );
-
 
     // ==================================================
     // COMPLETE
@@ -1209,30 +1134,25 @@ async function renderVideo(
       }
     );
 
-
     console.log(
       `[${jobId}] render completed successfully`
     );
   }
-
 
   // ====================================================
   // ERROR
   // ====================================================
 
   catch (error) {
-
     const errorText =
       error.stderr ||
       error.message ||
       String(error);
 
-
     console.error(
       `[${jobId}] Render error:`,
       errorText
     );
-
 
     updateJob(
       jobId,
@@ -1251,15 +1171,12 @@ async function renderVideo(
     );
   }
 
-
   // ====================================================
-  // CLEAN TEMP FILES
+  // CLEANUP
   // ====================================================
 
   finally {
-
     try {
-
       fs.rmSync(
         workDir,
         {
@@ -1271,14 +1188,10 @@ async function renderVideo(
         }
       );
 
-
       console.log(
         `[${jobId}] temp files cleaned`
       );
-    }
-
-    catch (error) {
-
+    } catch (error) {
       console.error(
         `[${jobId}] Cleanup error:`,
         error
@@ -1286,7 +1199,6 @@ async function renderVideo(
     }
   }
 }
-
 
 // ======================================================
 // HEALTH CHECK
@@ -1298,7 +1210,6 @@ app.get(
     req,
     res
   ) => {
-
     res.json({
       status:
         'ok',
@@ -1306,10 +1217,21 @@ app.get(
       service:
         'n8n-ffmpeg-render',
 
-      pollinations:
-        POLLINATIONS_API_KEY
+      image_provider:
+        'cloudflare-workers-ai',
+
+      cloudflare_account:
+        CLOUDFLARE_ACCOUNT_ID
           ? 'configured'
           : 'missing',
+
+      cloudflare_token:
+        CLOUDFLARE_API_TOKEN
+          ? 'configured'
+          : 'missing',
+
+      model:
+        CLOUDFLARE_MODEL,
 
       video_quality:
         '1920x1080',
@@ -1322,10 +1244,12 @@ app.get(
 
       crf:
         20,
+
+      threads:
+        1,
     });
   }
 );
-
 
 // ======================================================
 // CREATE RENDER JOB
@@ -1340,15 +1264,12 @@ app.post(
     req,
     res
   ) => {
-
     const jobId =
       crypto.randomUUID();
-
 
     console.log(
       `[${jobId}] new render request received`
     );
-
 
     saveJob(
       jobId,
@@ -1375,14 +1296,10 @@ app.post(
       }
     );
 
-
-    // Do NOT await:
-    // n8n receives job immediately
     renderVideo(
       jobId,
       req.body
     );
-
 
     res
       .status(202)
@@ -1402,9 +1319,8 @@ app.post(
   }
 );
 
-
 // ======================================================
-// JOB STATUS
+// STATUS
 // ======================================================
 
 app.get(
@@ -1416,15 +1332,12 @@ app.get(
     req,
     res
   ) => {
-
     const job =
       loadJob(
         req.params.jobId
       );
 
-
     if (!job) {
-
       return res
         .status(404)
         .json({
@@ -1432,7 +1345,6 @@ app.get(
             'Job not found',
         });
     }
-
 
     res.json({
       job_id:
@@ -1460,9 +1372,8 @@ app.get(
   }
 );
 
-
 // ======================================================
-// DOWNLOAD FINAL VIDEO
+// DOWNLOAD
 // ======================================================
 
 app.get(
@@ -1474,15 +1385,12 @@ app.get(
     req,
     res
   ) => {
-
     const job =
       loadJob(
         req.params.jobId
       );
 
-
     if (!job) {
-
       return res
         .status(404)
         .json({
@@ -1491,12 +1399,10 @@ app.get(
         });
     }
 
-
     if (
       job.status !==
       'completed'
     ) {
-
       return res
         .status(409)
         .json({
@@ -1508,14 +1414,12 @@ app.get(
         });
     }
 
-
     if (
       !job.outputPath ||
       !fs.existsSync(
         job.outputPath
       )
     ) {
-
       return res
         .status(404)
         .json({
@@ -1524,11 +1428,9 @@ app.get(
         });
     }
 
-
     console.log(
       `[${req.params.jobId}] download requested`
     );
-
 
     res.download(
       job.outputPath,
@@ -1537,9 +1439,8 @@ app.get(
   }
 );
 
-
 // ======================================================
-// START
+// START SERVER
 // ======================================================
 
 app.listen(
@@ -1547,23 +1448,36 @@ app.listen(
   '0.0.0.0',
 
   () => {
-
     console.log(
       `Server running on port ${PORT}`
     );
 
-
     console.log(
-      'Video quality: 1920x1080 / 30fps / CRF20 / veryfast'
+      `Image provider: Cloudflare Workers AI`
     );
 
-
     console.log(
-      `Pollinations API: ${
-        POLLINATIONS_API_KEY
+      `Cloudflare Account: ${
+        CLOUDFLARE_ACCOUNT_ID
           ? 'configured'
           : 'MISSING'
       }`
+    );
+
+    console.log(
+      `Cloudflare API Token: ${
+        CLOUDFLARE_API_TOKEN
+          ? 'configured'
+          : 'MISSING'
+      }`
+    );
+
+    console.log(
+      `Model: ${CLOUDFLARE_MODEL}`
+    );
+
+    console.log(
+      'Video quality: 1920x1080 / 30fps / CRF20 / veryfast / threads1'
     );
   }
 );
