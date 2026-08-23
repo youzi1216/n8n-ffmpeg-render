@@ -302,16 +302,11 @@ async function generateCloudflareImage(
     );
   }
 
-  // Cloudflare model prompt max is 2048 chars
   const finalPrompt =
     enhancedPrompt.slice(
       0,
       2000
     );
-
-  const seed =
-    10000 +
-    Number(sceneIndex);
 
   const url =
     `https://api.cloudflare.com/client/v4/accounts/` +
@@ -343,12 +338,8 @@ async function generateCloudflareImage(
             prompt:
               finalPrompt,
 
-            seed,
-
-            // Official range max 8.
-            // 6 gives better quality than default 4
-            // while still keeping free-tier usage reasonable.
-            steps: 6,
+            steps:
+              6,
           }),
       }
     );
@@ -371,16 +362,6 @@ async function generateCloudflareImage(
   }
 
   let imageBuffer = null;
-
-  // ====================================================
-  // Normal Workers AI REST response:
-  // {
-  //   success: true,
-  //   result: {
-  //     image: "BASE64..."
-  //   }
-  // }
-  // ====================================================
 
   if (
     contentType.includes(
@@ -687,20 +668,12 @@ async function renderVideo(
       }
     );
 
-    // ==================================================
-    // SCENES
-    // ==================================================
-
     const scenes =
       Array.isArray(
         payload.scenes
       )
         ? payload.scenes
         : [];
-
-    // ==================================================
-    // AUDIO
-    // ==================================================
 
     let audioParts = [];
 
@@ -782,8 +755,6 @@ async function renderVideo(
           )}.jpg`
         );
 
-      // NEW:
-      // Generate directly from Cloudflare
       if (
         scene.image_prompt
       ) {
@@ -797,10 +768,7 @@ async function renderVideo(
           sceneIndex,
           jobId
         );
-      }
-
-      // Legacy support
-      else if (
+      } else if (
         scene.image_url
       ) {
         console.log(
@@ -821,7 +789,6 @@ async function renderVideo(
         imagePath
       );
 
-      // Small pause to reduce API burst
       if (
         i <
         scenes.length -
@@ -978,7 +945,7 @@ async function renderVideo(
     );
 
     // ==================================================
-    // OUTPUT PATH
+    // OUTPUT
     // ==================================================
 
     const outputPath =
@@ -994,10 +961,6 @@ async function renderVideo(
     console.log(
       `[${jobId}] output = 1920x1080 / 30fps / CRF20 / veryfast / threads1`
     );
-
-    // ==================================================
-    // FFMPEG
-    // ==================================================
 
     await execFileAsync(
       'ffmpeg',
@@ -1020,11 +983,8 @@ async function renderVideo(
 
         [
           'scale=1920:1080:force_original_aspect_ratio=decrease',
-
           'pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
-
           'setsar=1',
-
           'format=yuv420p',
         ].join(','),
 
@@ -1040,8 +1000,6 @@ async function renderVideo(
         '-crf',
         '20',
 
-        // Render Free 512MB:
-        // limit encoder threads
         '-threads',
         '1',
 
@@ -1079,10 +1037,6 @@ async function renderVideo(
       `[${jobId}] ffmpeg completed`
     );
 
-    // ==================================================
-    // VERIFY OUTPUT
-    // ==================================================
-
     if (
       !fs.existsSync(
         outputPath
@@ -1114,10 +1068,6 @@ async function renderVideo(
         1024
       ).toFixed(2)} MB`
     );
-
-    // ==================================================
-    // COMPLETE
-    // ==================================================
 
     updateJob(
       jobId,
@@ -1440,7 +1390,7 @@ app.get(
 );
 
 // ======================================================
-// START SERVER
+// START
 // ======================================================
 
 app.listen(
@@ -1453,7 +1403,7 @@ app.listen(
     );
 
     console.log(
-      `Image provider: Cloudflare Workers AI`
+      'Image provider: Cloudflare Workers AI'
     );
 
     console.log(
