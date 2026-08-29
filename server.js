@@ -43,10 +43,10 @@ const CLOUDFLARE_MODEL =
 
 
 // ============================================================
-// RENDER LIMITS
+// PERFORMANCE SETTINGS
 // ============================================================
 
-// 免費 Render 建議一次只 Render 一支
+// 免費 Render 建議一次只做一支
 const MAX_CONCURRENT_RENDERS =
   Math.max(
     1,
@@ -55,7 +55,7 @@ const MAX_CONCURRENT_RENDERS =
     )
   );
 
-// FFmpeg 最長允許執行時間
+// FFmpeg 真正開始後的硬限制
 const MAX_RENDER_MINUTES =
   Math.max(
     5,
@@ -68,6 +68,24 @@ const MAX_RENDER_MS =
   MAX_RENDER_MINUTES *
   60 *
   1000;
+
+
+// ============================================================
+// DEFAULT VIDEO SETTINGS
+// ============================================================
+
+const DEFAULT_WIDTH = 1280;
+const DEFAULT_HEIGHT = 720;
+const DEFAULT_FPS = 24;
+
+const DEFAULT_TRANSITION_DURATION = 0.5;
+const DEFAULT_TRANSITION_TYPE = 'fade';
+
+const DEFAULT_CRF = 23;
+const DEFAULT_PRESET = 'ultrafast';
+
+// 免費 Render 通常不要開太多 thread
+const DEFAULT_THREADS = 2;
 
 
 // ============================================================
@@ -154,7 +172,7 @@ function loadJob(jobId) {
   } catch (error) {
 
     console.error(
-      `[${jobId}] loadJob error:`,
+      `[${jobId}] loadJob failed:`,
       error
     );
 
@@ -214,8 +232,7 @@ function checkApiKey(
     return res
       .status(401)
       .json({
-        error:
-          'Unauthorized',
+        error: 'Unauthorized',
       });
   }
 
@@ -259,11 +276,11 @@ function safeNumber(
   fallback
 ) {
 
-  const n =
+  const number =
     Number(value);
 
-  return Number.isFinite(n)
-    ? n
+  return Number.isFinite(number)
+    ? number
     : fallback;
 }
 
@@ -284,8 +301,20 @@ function safeString(
 }
 
 
+function normalizeShotType(value) {
+
+  return safeString(value)
+    .trim()
+    .toLowerCase()
+    .replace(
+      /[\s-]+/g,
+      '_'
+    );
+}
+
+
 // ============================================================
-// RUN PROCESS
+// PROCESS RUNNER
 // ============================================================
 
 function runProcess(
@@ -300,6 +329,7 @@ function runProcess(
     label = command,
   } = options;
 
+
   return new Promise(
     (
       resolve,
@@ -309,6 +339,7 @@ function runProcess(
       console.log(
         `[${jobId}] starting ${label}`
       );
+
 
       const child =
         spawn(
@@ -323,13 +354,11 @@ function runProcess(
           }
         );
 
-      let stdout =
-        '';
 
-      let stderr =
-        '';
+      let stdout = '';
+      let stderr = '';
 
-      let killedByTimeout =
+      let timeoutTriggered =
         false;
 
       let timeoutHandle =
@@ -343,7 +372,6 @@ function runProcess(
           stdout +=
             chunk.toString();
 
-          // 防止記憶體無限制累積
           if (
             stdout.length >
             2_000_000
@@ -361,11 +389,8 @@ function runProcess(
         'data',
         chunk => {
 
-          const text =
-            chunk.toString();
-
           stderr +=
-            text;
+            chunk.toString();
 
           if (
             stderr.length >
@@ -381,19 +406,19 @@ function runProcess(
 
 
       if (
-        timeoutMs > 0
+        timeoutMs >
+        0
       ) {
 
         timeoutHandle =
           setTimeout(
             () => {
 
-              killedByTimeout =
+              timeoutTriggered =
                 true;
 
               console.error(
-                `[${jobId}] ${label} exceeded timeout ` +
-                `${Math.round(timeoutMs / 60000)} minutes`
+                `[${jobId}] ${label} timeout`
               );
 
               try {
@@ -404,19 +429,15 @@ function runProcess(
                 // ignore
               }
 
-              // SIGTERM 沒停再強制殺
+
               setTimeout(
                 () => {
 
                   try {
 
-                    if (
-                      !child.killed
-                    ) {
-                      child.kill(
-                        'SIGKILL'
-                      );
-                    }
+                    child.kill(
+                      'SIGKILL'
+                    );
 
                   } catch (_) {
                     // ignore
@@ -444,9 +465,7 @@ function runProcess(
             );
           }
 
-          reject(
-            error
-          );
+          reject(error);
         }
       );
 
@@ -465,7 +484,7 @@ function runProcess(
 
 
           if (
-            killedByTimeout
+            timeoutTriggered
           ) {
 
             return reject(
@@ -485,14 +504,14 @@ function runProcess(
               new Error(
                 `${label} exited with code ${code}\n` +
                 stderr.slice(
-                  -10000
+                  -12000
                 )
               )
             );
           }
 
 
-          resolve({
+          return resolve({
             stdout,
             stderr,
           });
@@ -506,7 +525,7 @@ function runProcess(
 
 
 // ============================================================
-// DOWNLOAD
+// DOWNLOAD FILE
 // ============================================================
 
 async function downloadFile(
@@ -532,8 +551,8 @@ async function downloadFile(
     try {
 
       console.log(
-        `[${jobId}] downloading ${label} ` +
-        `(attempt ${attempt}/${maxAttempts})`
+        `[${jobId}] download ${label} ` +
+        `${attempt}/${maxAttempts}`
       );
 
 
@@ -541,15 +560,14 @@ async function downloadFile(
         await fetch(
           url,
           {
-            method:
-              'GET',
+            method: 'GET',
 
             redirect:
               'follow',
 
             headers: {
               'User-Agent':
-                'Mozilla/5.0 n8n-render/2.0',
+                'Mozilla/5.0 n8n-render-fast/3.0',
             },
           }
         );
@@ -559,13 +577,12 @@ async function downloadFile(
         !response.ok
       ) {
 
-        const text =
+        const responseText =
           await response.text();
 
         throw new Error(
-          `HTTP ${response.status} ` +
-          `${response.statusText}: ` +
-          text.slice(
+          `HTTP ${response.status}: ` +
+          responseText.slice(
             0,
             500
           )
@@ -583,10 +600,8 @@ async function downloadFile(
         buffer.length <
         500
       ) {
-
         throw new Error(
-          `${label} download too small: ` +
-          `${buffer.length} bytes`
+          `${label} returned only ${buffer.length} bytes`
         );
       }
 
@@ -594,15 +609,6 @@ async function downloadFile(
       fs.writeFileSync(
         outputPath,
         buffer
-      );
-
-
-      console.log(
-        `[${jobId}] ${label} downloaded ` +
-        `(${(
-          buffer.length /
-          1024
-        ).toFixed(1)} KB)`
       );
 
 
@@ -626,7 +632,7 @@ async function downloadFile(
 
         await sleep(
           attempt *
-          3000
+          2500
         );
       }
 
@@ -649,6 +655,7 @@ function buildEnhancedPrompt(prompt) {
       prompt
     ).trim();
 
+
   if (!base) {
     return '';
   }
@@ -663,15 +670,15 @@ eerie liminal space,
 empty environment,
 realistic cinematic photography,
 professional cinematic composition,
-realistic architectural proportions,
-realistic materials and textures,
+realistic architecture,
+realistic materials,
 subtle unsettling environmental details,
 cold desaturated color grading,
 deep shadows,
 soft volumetric lighting,
 low saturation,
 atmospheric suspense,
-high detail,
+highly detailed,
 16:9 widescreen,
 no people,
 no humans,
@@ -715,7 +722,7 @@ async function generateCloudflareImage(
     !CLOUDFLARE_ACCOUNT_ID
   ) {
     throw new Error(
-      'CLOUDFLARE_ACCOUNT_ID is missing'
+      'CLOUDFLARE_ACCOUNT_ID missing'
     );
   }
 
@@ -724,20 +731,21 @@ async function generateCloudflareImage(
     !CLOUDFLARE_API_TOKEN
   ) {
     throw new Error(
-      'CLOUDFLARE_API_TOKEN is missing'
+      'CLOUDFLARE_API_TOKEN missing'
     );
   }
 
 
-  const enhanced =
+  const finalPrompt =
     buildEnhancedPrompt(
       prompt
     );
 
 
-  if (!enhanced) {
+  if (!finalPrompt) {
+
     throw new Error(
-      `Visual ${visualIndex} has empty image_prompt`
+      `Visual ${visualIndex} image_prompt empty`
     );
   }
 
@@ -745,19 +753,16 @@ async function generateCloudflareImage(
   const url =
     `https://api.cloudflare.com/client/v4/accounts/` +
     `${CLOUDFLARE_ACCOUNT_ID}` +
-    `/ai/run/` +
-    `${CLOUDFLARE_MODEL}`;
+    `/ai/run/${CLOUDFLARE_MODEL}`;
 
 
   const response =
     await fetch(
       url,
       {
-        method:
-          'POST',
+        method: 'POST',
 
         headers: {
-
           Authorization:
             `Bearer ${CLOUDFLARE_API_TOKEN}`,
 
@@ -768,13 +773,12 @@ async function generateCloudflareImage(
         body:
           JSON.stringify({
             prompt:
-              enhanced.slice(
+              finalPrompt.slice(
                 0,
                 2400
               ),
 
-            steps:
-              6,
+            steps: 6,
           }),
       }
     );
@@ -788,7 +792,7 @@ async function generateCloudflareImage(
       await response.text();
 
     throw new Error(
-      `Cloudflare error ${response.status}: ` +
+      `Cloudflare ${response.status}: ` +
       text.slice(
         0,
         1000
@@ -828,13 +832,7 @@ async function generateCloudflareImage(
     ) {
 
       throw new Error(
-        `Cloudflare returned no image: ` +
-        JSON.stringify(
-          json
-        ).slice(
-          0,
-          1000
-        )
+        'Cloudflare returned no image'
       );
     }
 
@@ -865,7 +863,7 @@ async function generateCloudflareImage(
       `Unexpected Cloudflare response: ` +
       text.slice(
         0,
-        1000
+        500
       )
     );
   }
@@ -878,7 +876,7 @@ async function generateCloudflareImage(
   ) {
 
     throw new Error(
-      `Generated visual ${visualIndex} is invalid`
+      `Visual ${visualIndex} generated invalid image`
     );
   }
 
@@ -909,12 +907,6 @@ async function generateImageWithRetry(
 
     try {
 
-      console.log(
-        `[${jobId}] Cloudflare fallback ` +
-        `${visualIndex}, attempt ${attempt}`
-      );
-
-
       await generateCloudflareImage(
         prompt,
         outputPath,
@@ -922,10 +914,15 @@ async function generateImageWithRetry(
         jobId
       );
 
-
       return;
 
     } catch (error) {
+
+      console.error(
+        `[${jobId}] Cloudflare visual ${visualIndex} ` +
+        `attempt ${attempt}: ${error.message}`
+      );
+
 
       if (
         attempt ===
@@ -937,7 +934,7 @@ async function generateImageWithRetry(
 
       await sleep(
         attempt *
-        5000
+        4000
       );
 
     }
@@ -946,7 +943,7 @@ async function generateImageWithRetry(
 
 
 // ============================================================
-// FFPROBE
+// MEDIA DURATION
 // ============================================================
 
 async function getMediaDuration(
@@ -957,7 +954,6 @@ async function getMediaDuration(
   const result =
     await runProcess(
       'ffprobe',
-
       [
         '-v',
         'error',
@@ -970,7 +966,6 @@ async function getMediaDuration(
 
         filePath,
       ],
-
       {
         timeoutMs:
           60_000,
@@ -997,7 +992,7 @@ async function getMediaDuration(
   ) {
 
     throw new Error(
-      `Unable to detect duration: ${filePath}`
+      `Invalid media duration for ${filePath}`
     );
   }
 
@@ -1020,10 +1015,6 @@ async function mergeAudio(
     audioFiles.length === 1
   ) {
 
-    console.log(
-      `[${jobId}] one audio part, merge skipped`
-    );
-
     return audioFiles[0];
   }
 
@@ -1035,45 +1026,40 @@ async function mergeAudio(
     );
 
 
-  const mergedPath =
+  const outputPath =
     path.join(
       workDir,
       'merged-audio.m4a'
     );
 
 
-  const lines =
-    audioFiles.map(
-      file => {
+  const listContent =
+    audioFiles
+      .map(
+        file => {
 
-        const escaped =
-          file.replace(
-            /'/g,
-            "'\\''"
+          const safe =
+            file.replace(
+              /'/g,
+              "'\\''"
+            );
+
+          return (
+            `file '${safe}'`
           );
-
-        return (
-          `file '${escaped}'`
-        );
-      }
-    );
+        }
+      )
+      .join('\n');
 
 
   fs.writeFileSync(
     listPath,
-    lines.join('\n')
-  );
-
-
-  console.log(
-    `[${jobId}] merging ` +
-    `${audioFiles.length} audio parts`
+    listContent
   );
 
 
   await runProcess(
     'ffmpeg',
-
     [
       '-y',
 
@@ -1092,20 +1078,21 @@ async function mergeAudio(
       'aac',
 
       '-b:a',
-      '192k',
+      '160k',
 
       '-ar',
-      '48000',
+      '44100',
 
       '-ac',
       '2',
 
-      mergedPath,
+      outputPath,
     ],
-
     {
       timeoutMs:
-        5 * 60 * 1000,
+        5 *
+        60 *
+        1000,
 
       jobId,
 
@@ -1115,128 +1102,12 @@ async function mergeAudio(
   );
 
 
-  return mergedPath;
+  return outputPath;
 }
 
 
 // ============================================================
-// SHOT TYPE
-// ============================================================
-
-function normalizeShotType(value) {
-
-  return safeString(
-    value
-  )
-    .trim()
-    .toLowerCase()
-    .replace(
-      /[\s-]+/g,
-      '_'
-    );
-}
-
-
-// ============================================================
-// CINEMATIC MOTION
-// ============================================================
-
-function buildMotion(
-  scene,
-  index
-) {
-
-  const shotType =
-    normalizeShotType(
-      scene.shot_type
-    );
-
-
-  // ------------------------------------------
-  // Detail / close-up：
-  // 輕微推近，強調線索
-  // ------------------------------------------
-
-  if (
-    [
-      'detail',
-      'close_up',
-      'closeup',
-      'insert',
-      'extreme_close_up',
-    ].includes(
-      shotType
-    )
-  ) {
-
-    return {
-
-      zoom:
-        'min(zoom+0.00020,1.050)',
-
-      x:
-        'iw/2-(iw/zoom/2)',
-
-      y:
-        'ih/2-(ih/zoom/2)',
-    };
-  }
-
-
-  // ------------------------------------------
-  // Establishing / wide：
-  // 非常慢的空間推進
-  // ------------------------------------------
-
-  if (
-    [
-      'establishing',
-      'wide',
-      'environment',
-    ].includes(
-      shotType
-    )
-  ) {
-
-    return {
-
-      zoom:
-        'min(zoom+0.00011,1.030)',
-
-      x:
-        index % 2 === 0
-          ? 'iw/2-(iw/zoom/2)'
-          : 'iw/2-(iw/zoom/2)+((iw-iw/zoom)*0.025)',
-
-      y:
-        'ih/2-(ih/zoom/2)',
-    };
-  }
-
-
-  // ------------------------------------------
-  // 其他：
-  // 交替輕微左右偏移
-  // ------------------------------------------
-
-  return {
-
-    zoom:
-      'min(zoom+0.00015,1.040)',
-
-    x:
-      index % 2 === 0
-        ? 'iw/2-(iw/zoom/2)-((iw-iw/zoom)*0.018)'
-        : 'iw/2-(iw/zoom/2)+((iw-iw/zoom)*0.018)',
-
-    y:
-      'ih/2-(ih/zoom/2)',
-  };
-}
-
-
-// ============================================================
-// TRANSITION
+// TRANSITIONS
 // ============================================================
 
 const ALLOWED_TRANSITIONS =
@@ -1252,20 +1123,110 @@ function normalizeTransition(
   value
 ) {
 
-  const candidate =
+  const transition =
     safeString(
       value,
-      'fade'
+      DEFAULT_TRANSITION_TYPE
     )
       .trim()
       .toLowerCase();
 
 
   return ALLOWED_TRANSITIONS.has(
-    candidate
+    transition
   )
-    ? candidate
-    : 'fade';
+    ? transition
+    : DEFAULT_TRANSITION_TYPE;
+}
+
+
+// ============================================================
+// MOTION STRATEGY
+// ============================================================
+
+function shouldUseMotion(
+  scene,
+  index
+) {
+
+  const shotType =
+    normalizeShotType(
+      scene.shot_type
+    );
+
+
+  // 環境建立鏡頭才做真正 Ken Burns
+  if (
+    [
+      'establishing',
+      'wide',
+      'environment',
+    ].includes(
+      shotType
+    )
+  ) {
+    return true;
+  }
+
+
+  // 特寫刻意保持穩定
+  if (
+    [
+      'detail',
+      'close_up',
+      'closeup',
+      'insert',
+      'extreme_close_up',
+    ].includes(
+      shotType
+    )
+  ) {
+    return false;
+  }
+
+
+  // 未知 shot_type 每兩張才動一張
+  return (
+    index %
+    2 ===
+    0
+  );
+}
+
+
+function buildZoomExpression(
+  index
+) {
+
+  if (
+    index %
+    2 ===
+    0
+  ) {
+
+    return {
+      zoom:
+        'min(zoom+0.00013,1.030)',
+
+      x:
+        'iw/2-(iw/zoom/2)',
+
+      y:
+        'ih/2-(ih/zoom/2)',
+    };
+  }
+
+
+  return {
+    zoom:
+      'min(zoom+0.00011,1.028)',
+
+    x:
+      'iw/2-(iw/zoom/2)+((iw-iw/zoom)*0.02)',
+
+    y:
+      'ih/2-(ih/zoom/2)',
+  };
 }
 
 
@@ -1273,11 +1234,9 @@ function normalizeTransition(
 // QUEUE
 // ============================================================
 
-const renderQueue =
-  [];
+const renderQueue = [];
 
-let activeRenders =
-  0;
+let activeRenders = 0;
 
 
 function updateQueuePositions() {
@@ -1315,14 +1274,12 @@ function enqueueRender(
   updateJob(
     jobId,
     {
-      status:
-        'queued',
+      status: 'queued',
 
       queuePosition:
         renderQueue.length,
 
-      progress:
-        0,
+      progress: 0,
 
       currentStep:
         'queued',
@@ -1335,7 +1292,7 @@ function enqueueRender(
       error => {
 
         console.error(
-          'processQueue error:',
+          'Queue error:',
           error
         );
 
@@ -1356,7 +1313,9 @@ async function processQueue() {
     const next =
       renderQueue.shift();
 
+
     activeRenders++;
+
 
     updateQueuePositions();
 
@@ -1369,7 +1328,7 @@ async function processQueue() {
         error => {
 
           console.error(
-            `[${next.jobId}] render uncaught error`,
+            `[${next.jobId}] render error:`,
             error
           );
 
@@ -1385,7 +1344,7 @@ async function processQueue() {
               error => {
 
                 console.error(
-                  'queue continuation error:',
+                  'Queue continuation error:',
                   error
                 );
 
@@ -1393,6 +1352,7 @@ async function processQueue() {
             );
         }
       );
+
   }
 }
 
@@ -1441,6 +1401,9 @@ async function renderVideo(
         error:
           null,
 
+        timeoutReached:
+          false,
+
         renderStartedAt:
           new Date().toISOString(),
       }
@@ -1474,9 +1437,7 @@ async function renderVideo(
 
       audioParts = [
         {
-          part_index:
-            1,
-
+          part_index: 1,
           audio_url:
             payload.audio_url,
         },
@@ -1485,7 +1446,8 @@ async function renderVideo(
 
 
     if (
-      scenes.length === 0
+      scenes.length ===
+      0
     ) {
 
       throw new Error(
@@ -1495,17 +1457,18 @@ async function renderVideo(
 
 
     if (
-      audioParts.length === 0
+      audioParts.length ===
+      0
     ) {
 
       throw new Error(
-        'No audio_parts or audio_url provided'
+        'No audio provided'
       );
     }
 
 
     // ========================================================
-    // SORT
+    // SORT VISUALS
     // ========================================================
 
     scenes.sort(
@@ -1514,7 +1477,7 @@ async function renderVideo(
         b
       ) => {
 
-        const aRender =
+        const aRenderIndex =
           safeNumber(
             a.render_index,
             safeNumber(
@@ -1524,7 +1487,7 @@ async function renderVideo(
           );
 
 
-        const bRender =
+        const bRenderIndex =
           safeNumber(
             b.render_index,
             safeNumber(
@@ -1535,13 +1498,13 @@ async function renderVideo(
 
 
         if (
-          aRender !==
-          bRender
+          aRenderIndex !==
+          bRenderIndex
         ) {
 
           return (
-            aRender -
-            bRender
+            aRenderIndex -
+            bRenderIndex
           );
         }
 
@@ -1596,7 +1559,7 @@ async function renderVideo(
         Math.round(
           safeNumber(
             settings.width,
-            1920
+            DEFAULT_WIDTH
           )
         )
       );
@@ -1608,7 +1571,7 @@ async function renderVideo(
         Math.round(
           safeNumber(
             settings.height,
-            1080
+            DEFAULT_HEIGHT
           )
         )
       );
@@ -1619,11 +1582,11 @@ async function renderVideo(
         Math.round(
           safeNumber(
             settings.fps,
-            30
+            DEFAULT_FPS
           )
         ),
-        24,
-        60
+        20,
+        30
       );
 
 
@@ -1631,10 +1594,10 @@ async function renderVideo(
       clamp(
         safeNumber(
           settings.transition_duration,
-          0.7
+          DEFAULT_TRANSITION_DURATION
         ),
         0.2,
-        1.5
+        1.0
       );
 
 
@@ -1649,10 +1612,10 @@ async function renderVideo(
         Math.round(
           safeNumber(
             settings.crf,
-            20
+            DEFAULT_CRF
           )
         ),
-        16,
+        18,
         28
       );
 
@@ -1660,7 +1623,7 @@ async function renderVideo(
     const preset =
       safeString(
         settings.preset,
-        'veryfast'
+        DEFAULT_PRESET
       );
 
 
@@ -1670,18 +1633,34 @@ async function renderVideo(
         Math.round(
           safeNumber(
             settings.threads,
-            1
+            DEFAULT_THREADS
           )
         )
       );
 
 
     console.log(
-      `[${jobId}] visuals: ${scenes.length}`
+      `[${jobId}] SETTINGS`
     );
 
     console.log(
-      `[${jobId}] audio parts: ${audioParts.length}`
+      `[${jobId}] ${width}x${height}`
+    );
+
+    console.log(
+      `[${jobId}] fps=${fps}`
+    );
+
+    console.log(
+      `[${jobId}] visuals=${scenes.length}`
+    );
+
+    console.log(
+      `[${jobId}] preset=${preset}`
+    );
+
+    console.log(
+      `[${jobId}] crf=${crf}`
     );
 
 
@@ -1692,8 +1671,7 @@ async function renderVideo(
     updateJob(
       jobId,
       {
-        progress:
-          5,
+        progress: 5,
 
         currentStep:
           'preparing_images',
@@ -1704,8 +1682,7 @@ async function renderVideo(
     );
 
 
-    const imageFiles =
-      [];
+    const imageFiles = [];
 
 
     for (
@@ -1716,23 +1693,6 @@ async function renderVideo(
 
       const scene =
         scenes[i] || {};
-
-
-      const originalSceneNumber =
-        safeNumber(
-          scene.original_scene_number,
-          safeNumber(
-            scene.scene_number,
-            i + 1
-          )
-        );
-
-
-      const shotIndex =
-        safeNumber(
-          scene.shot_index,
-          1
-        );
 
 
       const imagePath =
@@ -1747,10 +1707,6 @@ async function renderVideo(
         );
 
 
-      // ------------------------------------------------------
-      // 最高優先：直接使用 n8n 已生成圖片
-      // ------------------------------------------------------
-
       if (
         typeof scene.image_url ===
           'string' &&
@@ -1761,27 +1717,16 @@ async function renderVideo(
           scene.image_url.trim(),
           imagePath,
           jobId,
-          `visual ${i + 1}/${scenes.length}`
+          `visual ${i + 1}`
         );
 
       }
-
-      // ------------------------------------------------------
-      // 沒有 image_url 才 Cloudflare fallback
-      // ------------------------------------------------------
 
       else if (
         typeof scene.image_prompt ===
           'string' &&
         scene.image_prompt.trim()
       ) {
-
-        console.log(
-          `[${jobId}] image_url missing for ` +
-          `scene ${originalSceneNumber} shot ${shotIndex}; ` +
-          `Cloudflare fallback`
-        );
-
 
         await generateImageWithRetry(
           scene.image_prompt,
@@ -1790,10 +1735,12 @@ async function renderVideo(
           jobId
         );
 
-      } else {
+      }
+
+      else {
 
         throw new Error(
-          `Visual ${i + 1} has neither image_url nor image_prompt`
+          `Visual ${i + 1} has no image_url/image_prompt`
         );
       }
 
@@ -1813,7 +1760,7 @@ async function renderVideo(
                 (i + 1) /
                 scenes.length
               ) *
-              25
+              22
             ),
 
           currentStep:
@@ -1822,23 +1769,18 @@ async function renderVideo(
       );
 
 
-      // Drive 不需要長時間等待
-      await sleep(
-        100
-      );
-
+      await sleep(80);
     }
 
 
     // ========================================================
-    // AUDIO DOWNLOAD
+    // AUDIO
     // ========================================================
 
     updateJob(
       jobId,
       {
-        progress:
-          32,
+        progress: 30,
 
         currentStep:
           'downloading_audio',
@@ -1846,8 +1788,7 @@ async function renderVideo(
     );
 
 
-    const audioFiles =
-      [];
+    const audioFiles = [];
 
 
     for (
@@ -1856,20 +1797,16 @@ async function renderVideo(
       i++
     ) {
 
-      const part =
-        audioParts[i];
-
-
       const audioUrl =
         safeString(
-          part.audio_url
+          audioParts[i]?.audio_url
         ).trim();
 
 
       if (!audioUrl) {
 
         throw new Error(
-          `Audio part ${i + 1} missing audio_url`
+          `Audio ${i + 1} missing audio_url`
         );
       }
 
@@ -1890,7 +1827,7 @@ async function renderVideo(
         audioUrl,
         audioPath,
         jobId,
-        `audio ${i + 1}/${audioParts.length}`
+        `audio ${i + 1}`
       );
 
 
@@ -1907,8 +1844,7 @@ async function renderVideo(
     updateJob(
       jobId,
       {
-        progress:
-          37,
+        progress: 35,
 
         currentStep:
           'merging_audio',
@@ -1931,36 +1867,13 @@ async function renderVideo(
       );
 
 
-    console.log(
-      `[${jobId}] audio duration: ` +
-      `${audioDuration.toFixed(2)} sec`
-    );
-
-
-    // ========================================================
-    // DURATION CALCULATION
-    // ========================================================
-
     const imageCount =
       imageFiles.length;
 
 
-    /*
-      Crossfade 後總長：
-
-      final =
-      N * clipDuration
-      - (N - 1) * transition
-
-      因此：
-
-      clipDuration =
-      (
-        audioDuration +
-        (N - 1) * transition
-      ) / N
-    */
-
+    // ========================================================
+    // TIMING
+    // ========================================================
 
     const clipDuration =
       (
@@ -1980,13 +1893,23 @@ async function renderVideo(
 
 
     if (
-      visibleStepDuration <= 0
+      visibleStepDuration <=
+      0
     ) {
 
       throw new Error(
-        'Calculated visual duration is invalid'
+        'Visual duration calculation failed'
       );
     }
+
+
+    console.log(
+      `[${jobId}] audio=${audioDuration.toFixed(2)} sec`
+    );
+
+    console.log(
+      `[${jobId}] visible/shot=${visibleStepDuration.toFixed(2)} sec`
+    );
 
 
     updateJob(
@@ -2001,18 +1924,11 @@ async function renderVideo(
 
         transitionDuration,
 
-        progress:
-          42,
+        progress: 40,
 
         currentStep:
-          'building_ffmpeg',
+          'building_filters',
       }
-    );
-
-
-    console.log(
-      `[${jobId}] per visual visible duration: ` +
-      `${visibleStepDuration.toFixed(2)} sec`
     );
 
 
@@ -2021,6 +1937,9 @@ async function renderVideo(
     // ========================================================
 
     const args = [
+      '-hide_banner',
+      '-loglevel',
+      'warning',
       '-y',
     ];
 
@@ -2048,7 +1967,6 @@ async function renderVideo(
     }
 
 
-    // 最後一個 input 是 audio
     args.push(
       '-i',
       finalAudio
@@ -2056,29 +1974,10 @@ async function renderVideo(
 
 
     // ========================================================
-    // FILTERS
+    // FILTER GRAPH
     // ========================================================
 
-    const filters =
-      [];
-
-
-    // --------------------------------------------------------
-    // Ken Burns
-    // --------------------------------------------------------
-
-    const workingWidth =
-      Math.round(
-        width *
-        1.08
-      );
-
-
-    const workingHeight =
-      Math.round(
-        height *
-        1.08
-      );
+    const filters = [];
 
 
     for (
@@ -2087,48 +1986,95 @@ async function renderVideo(
       i++
     ) {
 
-      const motion =
-        buildMotion(
-          scenes[i] || {},
+      const scene =
+        scenes[i] || {};
+
+
+      const useMotion =
+        shouldUseMotion(
+          scene,
           i
         );
 
 
-      filters.push(
+      // ------------------------------------------------------
+      // MOVING SHOT
+      // ------------------------------------------------------
 
-        `[${i}:v]` +
+      if (useMotion) {
 
-        `scale=` +
-        `${workingWidth}:` +
-        `${workingHeight}:` +
-        `force_original_aspect_ratio=increase,` +
+        const motion =
+          buildZoomExpression(
+            i
+          );
 
-        `crop=` +
-        `${workingWidth}:` +
-        `${workingHeight},` +
 
-        `zoompan=` +
-        `z='${motion.zoom}':` +
-        `x='${motion.x}':` +
-        `y='${motion.y}':` +
-        `d=1:` +
-        `s=${width}x${height}:` +
-        `fps=${fps},` +
+        filters.push(
 
-        `settb=AVTB,` +
-        `setpts=PTS-STARTPTS,` +
-        `setsar=1,` +
-        `format=yuv420p` +
+          `[${i}:v]` +
 
-        `[v${i}]`
+          `scale=` +
+          `${width}:${height}:` +
+          `force_original_aspect_ratio=increase,` +
 
-      );
+          `crop=` +
+          `${width}:${height},` +
+
+          `zoompan=` +
+          `z='${motion.zoom}':` +
+          `x='${motion.x}':` +
+          `y='${motion.y}':` +
+          `d=1:` +
+          `s=${width}x${height}:` +
+          `fps=${fps},` +
+
+          `settb=AVTB,` +
+          `setpts=PTS-STARTPTS,` +
+          `setsar=1,` +
+          `format=yuv420p` +
+
+          `[v${i}]`
+
+        );
+
+      }
+
+      // ------------------------------------------------------
+      // STATIC DETAIL SHOT
+      //
+      // 不跑 zoompan，CPU 需求低很多
+      // ------------------------------------------------------
+
+      else {
+
+        filters.push(
+
+          `[${i}:v]` +
+
+          `scale=` +
+          `${width}:${height}:` +
+          `force_original_aspect_ratio=increase,` +
+
+          `crop=` +
+          `${width}:${height},` +
+
+          `fps=${fps},` +
+
+          `settb=AVTB,` +
+          `setpts=PTS-STARTPTS,` +
+          `setsar=1,` +
+          `format=yuv420p` +
+
+          `[v${i}]`
+
+        );
+      }
     }
 
 
-    // --------------------------------------------------------
-    // Crossfade
-    // --------------------------------------------------------
+    // ========================================================
+    // CROSSFADE
+    // ========================================================
 
     let previous =
       'v0';
@@ -2144,7 +2090,7 @@ async function renderVideo(
         i++
       ) {
 
-        const output =
+        const outputLabel =
           `xf${i}`;
 
 
@@ -2163,13 +2109,13 @@ async function renderVideo(
           `duration=${transitionDuration.toFixed(6)}:` +
           `offset=${offset.toFixed(6)}` +
 
-          `[${output}]`
+          `[${outputLabel}]`
 
         );
 
 
         previous =
-          output;
+          outputLabel;
       }
     }
 
@@ -2181,7 +2127,7 @@ async function renderVideo(
 
 
     // ========================================================
-    // FINAL OUTPUT
+    // OUTPUT
     // ========================================================
 
     const outputPath =
@@ -2213,9 +2159,6 @@ async function renderVideo(
       '-threads',
       String(threads),
 
-      '-profile:v',
-      'high',
-
       '-pix_fmt',
       'yuv420p',
 
@@ -2223,10 +2166,10 @@ async function renderVideo(
       'aac',
 
       '-b:a',
-      '192k',
+      '160k',
 
       '-ar',
-      '48000',
+      '44100',
 
       '-ac',
       '2',
@@ -2246,11 +2189,14 @@ async function renderVideo(
     );
 
 
+    // ========================================================
+    // RENDER
+    // ========================================================
+
     updateJob(
       jobId,
       {
-        progress:
-          48,
+        progress: 48,
 
         currentStep:
           'ffmpeg_rendering',
@@ -2259,23 +2205,9 @@ async function renderVideo(
 
 
     console.log(
-      `[${jobId}] FFmpeg cinematic render starting`
+      `[${jobId}] FAST cinematic render started`
     );
 
-    console.log(
-      `[${jobId}] ` +
-      `${width}x${height} | ` +
-      `${fps}fps | ` +
-      `${imageCount} visuals | ` +
-      `${transitionDuration}s crossfade | ` +
-      `hard timeout ${MAX_RENDER_MINUTES} min`
-    );
-
-
-    // ========================================================
-    // IMPORTANT:
-    // 真正 25 分鐘硬超時
-    // ========================================================
 
     await runProcess(
       'ffmpeg',
@@ -2293,7 +2225,7 @@ async function renderVideo(
 
 
     // ========================================================
-    // VALIDATE
+    // VALIDATE OUTPUT
     // ========================================================
 
     if (
@@ -2303,7 +2235,7 @@ async function renderVideo(
     ) {
 
       throw new Error(
-        'FFmpeg completed but output video does not exist'
+        'Final MP4 not created'
       );
     }
 
@@ -2320,7 +2252,7 @@ async function renderVideo(
     ) {
 
       throw new Error(
-        `Output video too small: ${outputSize} bytes`
+        `Final MP4 too small: ${outputSize}`
       );
     }
 
@@ -2344,6 +2276,9 @@ async function renderVideo(
         currentStep:
           'completed',
 
+        timeoutReached:
+          false,
+
         outputPath,
 
         outputSize,
@@ -2360,17 +2295,15 @@ async function renderVideo(
 
 
     console.log(
-      `[${jobId}] render completed`
+      `[${jobId}] completed`
     );
 
     console.log(
-      `[${jobId}] duration: ` +
-      `${outputDuration.toFixed(2)} sec`
+      `[${jobId}] duration=${outputDuration.toFixed(2)} sec`
     );
 
     console.log(
-      `[${jobId}] size: ` +
-      `${(
+      `[${jobId}] size=${(
         outputSize /
         1024 /
         1024
@@ -2378,10 +2311,6 @@ async function renderVideo(
     );
 
   }
-
-  // ==========================================================
-  // ERROR / TIMEOUT
-  // ==========================================================
 
   catch (error) {
 
@@ -2395,16 +2324,16 @@ async function renderVideo(
       );
 
 
-    console.error(
-      `[${jobId}] render failed:`,
-      message
-    );
-
-
     const timedOut =
       message.includes(
         'exceeded maximum runtime'
       );
+
+
+    console.error(
+      `[${jobId}] FAILED:`,
+      message
+    );
 
 
     updateJob(
@@ -2412,9 +2341,6 @@ async function renderVideo(
       {
         status:
           'failed',
-
-        progress:
-          null,
 
         currentStep:
           timedOut
@@ -2427,18 +2353,14 @@ async function renderVideo(
         error:
           timedOut
             ? (
-                `Render exceeded ${MAX_RENDER_MINUTES} minutes ` +
-                `and FFmpeg was terminated automatically.`
+                `FFmpeg 超過 ${MAX_RENDER_MINUTES} 分鐘，` +
+                `已由 Render Server 強制停止。`
               )
             : message,
       }
     );
 
   }
-
-  // ==========================================================
-  // CLEANUP
-  // ==========================================================
 
   finally {
 
@@ -2447,23 +2369,15 @@ async function renderVideo(
       fs.rmSync(
         workDir,
         {
-          recursive:
-            true,
-
-          force:
-            true,
+          recursive: true,
+          force: true,
         }
-      );
-
-
-      console.log(
-        `[${jobId}] temp files cleaned`
       );
 
     } catch (error) {
 
       console.error(
-        `[${jobId}] cleanup error:`,
+        `[${jobId}] cleanup failed`,
         error
       );
     }
@@ -2478,13 +2392,12 @@ async function renderVideo(
 
 app.get(
   '/',
-
   (
     req,
     res
   ) => {
 
-    res.json({
+    return res.json({
 
       status:
         'ok',
@@ -2493,53 +2406,31 @@ app.get(
         'n8n-ffmpeg-render',
 
       version:
-        '2.0-cinematic',
+        '3.0-fast',
 
-      render_mode:
-        'environmental-horror',
+      mode:
+        'environmental-horror-fast',
 
-      image_priority:
-        'image_url_first',
+      default_resolution:
+        `${DEFAULT_WIDTH}x${DEFAULT_HEIGHT}`,
 
-      image_fallback:
-        'cloudflare',
+      default_fps:
+        DEFAULT_FPS,
 
-      cloudflare_account:
-        CLOUDFLARE_ACCOUNT_ID
-          ? 'configured'
-          : 'missing',
+      default_crf:
+        DEFAULT_CRF,
 
-      cloudflare_token:
-        CLOUDFLARE_API_TOKEN
-          ? 'configured'
-          : 'missing',
+      default_preset:
+        DEFAULT_PRESET,
 
-      cloudflare_model:
-        CLOUDFLARE_MODEL,
-
-      default_video:
-        '1920x1080-30fps',
-
-      features: [
-        '24-visual-support',
-        'multi-shot',
-        'image-url-first',
-        'cloudflare-fallback',
-        'ken-burns',
-        'shot-aware-motion',
-        'crossfade',
-        'multi-part-audio',
-        'audio-sync',
-        'render-queue',
-        'elapsed-time',
-        'hard-render-timeout',
-      ],
-
-      max_concurrent_renders:
-        MAX_CONCURRENT_RENDERS,
+      default_transition:
+        DEFAULT_TRANSITION_DURATION,
 
       max_render_minutes:
         MAX_RENDER_MINUTES,
+
+      max_concurrent_renders:
+        MAX_CONCURRENT_RENDERS,
 
       active_renders:
         activeRenders,
@@ -2547,20 +2438,42 @@ app.get(
       queued_renders:
         renderQueue.length,
 
+      image_priority:
+        'image_url-first',
+
+      cloudflare_fallback:
+        Boolean(
+          CLOUDFLARE_ACCOUNT_ID &&
+          CLOUDFLARE_API_TOKEN
+        ),
+
+      features: [
+        '24-visual-support',
+        'multi-shot-support',
+        'selective-ken-burns',
+        'static-detail-shots',
+        'crossfade',
+        '720p-optimized',
+        '24fps-optimized',
+        'ultrafast-h264',
+        'multi-part-audio',
+        'render-queue',
+        'elapsed-time',
+        'hard-timeout',
+      ],
+
     });
   }
 );
 
 
 // ============================================================
-// CREATE JOB
+// CREATE RENDER JOB
 // ============================================================
 
 app.post(
   '/render',
-
   checkApiKey,
-
   (
     req,
     res
@@ -2613,7 +2526,7 @@ app.post(
       crypto.randomUUID();
 
 
-    const createdAt =
+    const now =
       new Date().toISOString();
 
 
@@ -2665,7 +2578,8 @@ app.post(
         outputPath:
           null,
 
-        createdAt,
+        createdAt:
+          now,
 
         renderStartedAt:
           null,
@@ -2674,7 +2588,7 @@ app.post(
           null,
 
         updatedAt:
-          createdAt,
+          now,
       }
     );
 
@@ -2682,11 +2596,6 @@ app.post(
     enqueueRender(
       jobId,
       payload
-    );
-
-
-    console.log(
-      `[${jobId}] render job created`
     );
 
 
@@ -2717,9 +2626,7 @@ app.post(
 
 app.get(
   '/status/:jobId',
-
   checkApiKey,
-
   (
     req,
     res
@@ -2746,10 +2653,6 @@ app.get(
     }
 
 
-    // ========================================================
-    // ELAPSED TIME
-    // ========================================================
-
     let elapsedSeconds =
       null;
 
@@ -2761,7 +2664,7 @@ app.get(
       job.createdAt
     ) {
 
-      const created =
+      const createdTime =
         new Date(
           job.createdAt
         ).getTime();
@@ -2769,7 +2672,7 @@ app.get(
 
       if (
         Number.isFinite(
-          created
+          createdTime
         )
       ) {
 
@@ -2779,7 +2682,7 @@ app.get(
             Math.floor(
               (
                 Date.now() -
-                created
+                createdTime
               ) /
               1000
             )
@@ -2791,17 +2694,11 @@ app.get(
             (
               elapsedSeconds /
               60
-            ).toFixed(
-              2
-            )
+            ).toFixed(2)
           );
       }
     }
 
-
-    // ========================================================
-    // STATUS RESPONSE
-    // ========================================================
 
     return res.json({
 
@@ -2895,9 +2792,7 @@ app.get(
 
 app.get(
   '/download/:jobId',
-
   checkApiKey,
-
   (
     req,
     res
@@ -2970,14 +2865,9 @@ app.get(
         .status(404)
         .json({
           error:
-            'Rendered video file not found',
+            'Video file not found',
         });
     }
-
-
-    console.log(
-      `[${jobId}] video download requested`
-    );
 
 
     return res.download(
@@ -2989,14 +2879,12 @@ app.get(
 
 
 // ============================================================
-// OPTIONAL JOB DEBUG
+// DEBUG JOB
 // ============================================================
 
 app.get(
   '/job/:jobId',
-
   checkApiKey,
-
   (
     req,
     res
@@ -3019,9 +2907,7 @@ app.get(
     }
 
 
-    return res.json(
-      job
-    );
+    return res.json(job);
   }
 );
 
@@ -3047,7 +2933,7 @@ app.use(
 
 
 // ============================================================
-// GLOBAL ERROR
+// GLOBAL ERROR HANDLER
 // ============================================================
 
 app.use(
@@ -3068,9 +2954,7 @@ app.use(
       res.headersSent
     ) {
 
-      return next(
-        error
-      );
+      return next(error);
     }
 
 
@@ -3099,15 +2983,14 @@ app.use(
 app.listen(
   PORT,
   '0.0.0.0',
-
   () => {
 
     console.log(
-      '========================================'
+      '=============================================='
     );
 
     console.log(
-      `n8n FFmpeg Render v2 running`
+      'n8n FFmpeg Render 3.0 FAST'
     );
 
     console.log(
@@ -3115,31 +2998,31 @@ app.listen(
     );
 
     console.log(
-      `Max concurrent renders: ${MAX_CONCURRENT_RENDERS}`
+      `Default video: ${DEFAULT_WIDTH}x${DEFAULT_HEIGHT} / ${DEFAULT_FPS}fps`
     );
 
     console.log(
-      `Hard render timeout: ${MAX_RENDER_MINUTES} minutes`
+      `H264 preset: ${DEFAULT_PRESET}`
     );
 
     console.log(
-      `Cloudflare model: ${CLOUDFLARE_MODEL}`
+      `CRF: ${DEFAULT_CRF}`
     );
 
     console.log(
-      'Image priority: image_url -> Cloudflare fallback'
+      `Transition: ${DEFAULT_TRANSITION_DURATION}s`
     );
 
     console.log(
-      'Video mode: 1080p cinematic Environmental Horror'
+      `Hard timeout: ${MAX_RENDER_MINUTES} minutes`
     );
 
     console.log(
-      'Effects: Shot-aware Ken Burns + Crossfade'
+      'Motion strategy: establishing moves / detail stays stable'
     );
 
     console.log(
-      '========================================'
+      '=============================================='
     );
 
   }
