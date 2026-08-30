@@ -31,31 +31,35 @@ const API_KEY =
 
 
 // ============================================================
-// HARD RENDER SETTINGS
+// HARD VIDEO SETTINGS
 //
-// 重要：
-// 完全不再依賴 n8n 傳進來的 Render Settings。
-// 避免舊 Payload 又把解析度改回 1080p。
+// 1600x900
+// 24fps
+// ultrafast
+// CRF22
 // ============================================================
 
-const WIDTH = 1280;
-const HEIGHT = 720;
+const WIDTH =
+  1600;
 
-const FPS = 24;
+const HEIGHT =
+  900;
 
-const CRF = 24;
+const FPS =
+  24;
+
+const CRF =
+  22;
 
 const PRESET =
   'ultrafast';
 
-const THREADS = 2;
+const THREADS =
+  2;
 
 
 // ============================================================
 // TRANSITION
-//
-// 不再使用 xfade。
-// 每段做極短 fade-in / fade-out。
 // ============================================================
 
 const FADE_DURATION =
@@ -64,10 +68,13 @@ const FADE_DURATION =
 
 // ============================================================
 // TIMEOUT
+//
+// 900p 比 720p 負擔高。
+// 先放到 45 分鐘避免誤殺正常 Render。
 // ============================================================
 
 const HARD_TIMEOUT_MINUTES =
-  35;
+  45;
 
 const HARD_TIMEOUT_MS =
   HARD_TIMEOUT_MINUTES *
@@ -80,7 +87,7 @@ const HARD_TIMEOUT_MS =
 // ============================================================
 
 const ROOT =
-  '/tmp/n8n-render-fast';
+  '/tmp/n8n-render-900p';
 
 const JOBS_DIR =
   path.join(
@@ -114,10 +121,12 @@ fs.mkdirSync(
 // ============================================================
 
 function getJobPath(jobId) {
+
   return path.join(
     JOBS_DIR,
     `${jobId}.json`
   );
+
 }
 
 
@@ -134,6 +143,7 @@ function saveJob(
       2
     )
   );
+
 }
 
 
@@ -142,9 +152,13 @@ function loadJob(jobId) {
   const file =
     getJobPath(jobId);
 
-  if (!fs.existsSync(file)) {
+
+  if (
+    !fs.existsSync(file)
+  ) {
     return null;
   }
+
 
   try {
 
@@ -164,6 +178,7 @@ function loadJob(jobId) {
 
     return null;
   }
+
 }
 
 
@@ -176,8 +191,11 @@ function updateJob(
     loadJob(jobId) ||
     {};
 
+
   const updated = {
+
     ...current,
+
     ...changes,
 
     updatedAt:
@@ -185,12 +203,15 @@ function updateJob(
         .toISOString()
   };
 
+
   saveJob(
     jobId,
     updated
   );
 
+
   return updated;
+
 }
 
 
@@ -208,6 +229,7 @@ function checkApiKey(
     return next();
   }
 
+
   const given =
     String(
       req.headers[
@@ -216,7 +238,11 @@ function checkApiKey(
       ''
     );
 
-  if (given !== API_KEY) {
+
+  if (
+    given !==
+    API_KEY
+  ) {
 
     return res
       .status(401)
@@ -224,9 +250,12 @@ function checkApiKey(
         error:
           'Unauthorized'
       });
+
   }
 
+
   next();
+
 }
 
 
@@ -235,6 +264,7 @@ function checkApiKey(
 // ============================================================
 
 function sleep(ms) {
+
   return new Promise(
     resolve =>
       setTimeout(
@@ -242,6 +272,7 @@ function sleep(ms) {
         ms
       )
   );
+
 }
 
 
@@ -253,9 +284,11 @@ function safeNumber(
   const n =
     Number(value);
 
+
   return Number.isFinite(n)
     ? n
     : fallback;
+
 }
 
 
@@ -271,6 +304,7 @@ function normalizeShotType(value) {
       /[\s-]+/g,
       '_'
     );
+
 }
 
 
@@ -285,9 +319,16 @@ function runProcess(
 ) {
 
   const {
-    timeoutMs = 0,
-    jobId = '',
-    label = command
+
+    timeoutMs =
+      0,
+
+    jobId =
+      '',
+
+    label =
+      command
+
   } = options;
 
 
@@ -316,8 +357,11 @@ function runProcess(
         );
 
 
-      let stdout = '';
-      let stderr = '';
+      let stdout =
+        '';
+
+      let stderr =
+        '';
 
       let timedOut =
         false;
@@ -333,6 +377,7 @@ function runProcess(
           stdout +=
             chunk.toString();
 
+
           if (
             stdout.length >
             1000000
@@ -342,7 +387,9 @@ function runProcess(
               stdout.slice(
                 -500000
               );
+
           }
+
         }
       );
 
@@ -354,6 +401,7 @@ function runProcess(
           stderr +=
             chunk.toString();
 
+
           if (
             stderr.length >
             3000000
@@ -363,12 +411,17 @@ function runProcess(
               stderr.slice(
                 -1000000
               );
+
           }
+
         }
       );
 
 
-      if (timeoutMs > 0) {
+      if (
+        timeoutMs >
+        0
+      ) {
 
         timer =
           setTimeout(
@@ -377,9 +430,11 @@ function runProcess(
               timedOut =
                 true;
 
+
               console.error(
                 `[${jobId}] TIMEOUT ${label}`
               );
+
 
               try {
 
@@ -388,6 +443,7 @@ function runProcess(
                 );
 
               } catch (_) {}
+
 
               setTimeout(
                 () => {
@@ -407,6 +463,7 @@ function runProcess(
             },
             timeoutMs
           );
+
       }
 
 
@@ -418,7 +475,9 @@ function runProcess(
             clearTimeout(timer);
           }
 
+
           reject(error);
+
         }
       );
 
@@ -439,10 +498,14 @@ function runProcess(
                 `${label} timeout`
               )
             );
+
           }
 
 
-          if (code !== 0) {
+          if (
+            code !==
+            0
+          ) {
 
             return reject(
               new Error(
@@ -452,6 +515,7 @@ function runProcess(
                 )
               )
             );
+
           }
 
 
@@ -465,6 +529,7 @@ function runProcess(
 
     }
   );
+
 }
 
 
@@ -505,17 +570,20 @@ async function downloadFile(
 
             headers: {
               'User-Agent':
-                'Mozilla/5.0 n8n-render-fast'
+                'Mozilla/5.0 n8n-render-900p'
             }
           }
         );
 
 
-      if (!response.ok) {
+      if (
+        !response.ok
+      ) {
 
         throw new Error(
           `HTTP ${response.status}`
         );
+
       }
 
 
@@ -531,8 +599,9 @@ async function downloadFile(
       ) {
 
         throw new Error(
-          `Downloaded file too small`
+          'Downloaded file too small'
         );
+
       }
 
 
@@ -549,18 +618,26 @@ async function downloadFile(
       lastError =
         error;
 
-      if (attempt < 4) {
+
+      if (
+        attempt <
+        4
+      ) {
 
         await sleep(
           attempt *
           2500
         );
+
       }
+
     }
+
   }
 
 
   throw lastError;
+
 }
 
 
@@ -614,10 +691,12 @@ async function getDuration(
     throw new Error(
       'Invalid duration'
     );
+
   }
 
 
   return duration;
+
 }
 
 
@@ -632,10 +711,12 @@ async function mergeAudio(
 ) {
 
   if (
-    files.length === 1
+    files.length ===
+    1
   ) {
 
     return files[0];
+
   }
 
 
@@ -644,6 +725,7 @@ async function mergeAudio(
       workDir,
       'audio.txt'
     );
+
 
   const output =
     path.join(
@@ -690,7 +772,7 @@ async function mergeAudio(
       'aac',
 
       '-b:a',
-      '128k',
+      '160k',
 
       '-ar',
       '44100',
@@ -715,11 +797,12 @@ async function mergeAudio(
 
 
   return output;
+
 }
 
 
 // ============================================================
-// SHOULD MOTION
+// MOTION
 // ============================================================
 
 function useMotion(scene) {
@@ -735,11 +818,12 @@ function useMotion(scene) {
     'wide',
     'environment'
   ].includes(type);
+
 }
 
 
 // ============================================================
-// RENDER ONE VISUAL CLIP
+// CREATE ONE VISUAL CLIP
 // ============================================================
 
 async function createVisualClip(
@@ -766,10 +850,9 @@ async function createVisualClip(
   let videoFilter;
 
 
-  // ----------------------------------------------------------
-  // Establishing：
-  // Slow Ken Burns
-  // ----------------------------------------------------------
+  // ==========================================================
+  // Moving shot
+  // ==========================================================
 
   if (motion) {
 
@@ -781,17 +864,23 @@ async function createVisualClip(
 
 
     const horizontalOffset =
-      index % 2 === 0
+      index %
+      2 ===
+      0
         ? 0
-        : 0.015;
+        : 0.012;
 
 
     videoFilter =
       [
-        `scale=1344:756:force_original_aspect_ratio=increase`,
-        `crop=1344:756`,
+
+        // 先稍微放大，避免 zoompan 邊緣不足
+        `scale=1664:936:force_original_aspect_ratio=increase`,
+
+        `crop=1664:936`,
+
         `zoompan=` +
-          `z='min(zoom+0.00008,1.018)':` +
+          `z='min(zoom+0.000065,1.016)':` +
           `x='iw/2-(iw/zoom/2)+((iw-iw/zoom)*${horizontalOffset})':` +
           `y='ih/2-(ih/zoom/2)':` +
           `d=${frames}:` +
@@ -803,20 +892,21 @@ async function createVisualClip(
         `fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${FADE_DURATION}`,
 
         `format=yuv420p`
+
       ]
         .join(',');
 
   }
 
-  // ----------------------------------------------------------
-  // Detail：
-  // Static
-  // ----------------------------------------------------------
+  // ==========================================================
+  // Static detail
+  // ==========================================================
 
   else {
 
     videoFilter =
       [
+
         `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
 
         `crop=${WIDTH}:${HEIGHT}`,
@@ -828,8 +918,10 @@ async function createVisualClip(
         `fade=t=out:st=${fadeOutStart.toFixed(3)}:d=${FADE_DURATION}`,
 
         `format=yuv420p`
+
       ]
         .join(',');
+
   }
 
 
@@ -881,7 +973,9 @@ async function createVisualClip(
     {
       timeoutMs:
         Math.min(
-          5 * 60 * 1000,
+          7 *
+          60 *
+          1000,
           HARD_TIMEOUT_MS
         ),
 
@@ -891,11 +985,12 @@ async function createVisualClip(
         `visual clip ${index + 1}`
     }
   );
+
 }
 
 
 // ============================================================
-// CONCAT CLIPS
+// CONCAT
 // ============================================================
 
 async function concatClips(
@@ -909,6 +1004,7 @@ async function concatClips(
       workDir,
       'video.txt'
     );
+
 
   const output =
     path.join(
@@ -928,8 +1024,6 @@ async function concatClips(
   );
 
 
-  // 所有片段 codec / resolution / fps 完全相同，
-  // 所以直接 stream copy，速度非常快。
   await runProcess(
     'ffmpeg',
     [
@@ -954,7 +1048,7 @@ async function concatClips(
     ],
     {
       timeoutMs:
-        3 *
+        5 *
         60 *
         1000,
 
@@ -967,6 +1061,7 @@ async function concatClips(
 
 
   return output;
+
 }
 
 
@@ -1009,7 +1104,7 @@ async function attachAudio(
       'aac',
 
       '-b:a',
-      '128k',
+      '160k',
 
       '-shortest',
 
@@ -1033,6 +1128,7 @@ async function attachAudio(
         'attach audio'
     }
   );
+
 }
 
 
@@ -1040,7 +1136,8 @@ async function attachAudio(
 // QUEUE
 // ============================================================
 
-const queue = [];
+const queue =
+  [];
 
 let active =
   false;
@@ -1076,6 +1173,7 @@ function enqueue(
 
 
   runQueue();
+
 }
 
 
@@ -1085,7 +1183,10 @@ async function runQueue() {
     return;
   }
 
-  if (!queue.length) {
+
+  if (
+    !queue.length
+  ) {
     return;
   }
 
@@ -1135,15 +1236,18 @@ async function runQueue() {
     active =
       false;
 
+
     setImmediate(
       runQueue
     );
+
   }
+
 }
 
 
 // ============================================================
-// MAIN RENDER JOB
+// MAIN RENDER
 // ============================================================
 
 async function renderJob(
@@ -1161,7 +1265,8 @@ async function renderJob(
   fs.mkdirSync(
     workDir,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
@@ -1216,26 +1321,39 @@ async function renderJob(
         : [];
 
 
-    if (!scenes.length) {
+    if (
+      !scenes.length
+    ) {
+
       throw new Error(
         'No scenes'
       );
+
     }
 
 
-    if (!audioParts.length) {
+    if (
+      !audioParts.length
+    ) {
+
       throw new Error(
         'No audio_parts'
       );
+
     }
 
 
     scenes.sort(
-      (a, b) =>
+      (
+        a,
+        b
+      ) =>
+
         safeNumber(
           a.render_index,
           0
         ) -
+
         safeNumber(
           b.render_index,
           0
@@ -1244,11 +1362,16 @@ async function renderJob(
 
 
     audioParts.sort(
-      (a, b) =>
+      (
+        a,
+        b
+      ) =>
+
         safeNumber(
           a.part_index,
           0
         ) -
+
         safeNumber(
           b.part_index,
           0
@@ -1257,7 +1380,7 @@ async function renderJob(
 
 
     // ========================================================
-    // DOWNLOAD IMAGES
+    // Images
     // ========================================================
 
     updateJob(
@@ -1301,6 +1424,7 @@ async function renderJob(
         throw new Error(
           `Visual ${i + 1} missing image_url`
         );
+
       }
 
 
@@ -1341,11 +1465,12 @@ async function renderJob(
             `image_${i + 1}_of_${scenes.length}`
         }
       );
+
     }
 
 
     // ========================================================
-    // DOWNLOAD AUDIO
+    // Audio
     // ========================================================
 
     updateJob(
@@ -1378,9 +1503,11 @@ async function renderJob(
 
 
       if (!url) {
+
         throw new Error(
           `Audio part ${i + 1} missing URL`
         );
+
       }
 
 
@@ -1402,11 +1529,12 @@ async function renderJob(
       audioFiles.push(
         file
       );
+
     }
 
 
     // ========================================================
-    // MERGE AUDIO
+    // Merge Audio
     // ========================================================
 
     updateJob(
@@ -1444,6 +1572,7 @@ async function renderJob(
     updateJob(
       jobId,
       {
+
         audioDuration,
 
         sceneDuration:
@@ -1482,7 +1611,7 @@ async function renderJob(
 
 
     // ========================================================
-    // CREATE CLIPS ONE BY ONE
+    // Render visual clips
     // ========================================================
 
     const clips =
@@ -1504,6 +1633,7 @@ async function renderJob(
         throw new Error(
           'HARD_RENDER_TIMEOUT'
         );
+
       }
 
 
@@ -1532,6 +1662,7 @@ async function renderJob(
       updateJob(
         jobId,
         {
+
           progress:
             32 +
             Math.round(
@@ -1544,13 +1675,15 @@ async function renderJob(
 
           currentStep:
             `visual_clip_${i + 1}_of_${scenes.length}`
+
         }
       );
+
     }
 
 
     // ========================================================
-    // CONCAT
+    // Concat
     // ========================================================
 
     updateJob(
@@ -1574,7 +1707,7 @@ async function renderJob(
 
 
     // ========================================================
-    // AUDIO
+    // Attach Audio
     // ========================================================
 
     updateJob(
@@ -1606,7 +1739,7 @@ async function renderJob(
 
 
     // ========================================================
-    // VALIDATE
+    // Validate
     // ========================================================
 
     if (
@@ -1618,6 +1751,7 @@ async function renderJob(
       throw new Error(
         'Final file missing'
       );
+
     }
 
 
@@ -1635,6 +1769,7 @@ async function renderJob(
       throw new Error(
         'Final file invalid'
       );
+
     }
 
 
@@ -1705,6 +1840,7 @@ async function renderJob(
     updateJob(
       jobId,
       {
+
         status:
           'failed',
 
@@ -1718,7 +1854,7 @@ async function renderJob(
 
         error:
           timeout
-            ? `Server render 超過 ${HARD_TIMEOUT_MINUTES} 分鐘。`
+            ? `Server Render 超過 ${HARD_TIMEOUT_MINUTES} 分鐘。`
             : message.slice(
                 0,
                 12000
@@ -1741,14 +1877,18 @@ async function renderJob(
       fs.rmSync(
         workDir,
         {
-          recursive: true,
-          force: true
+          recursive:
+            true,
+
+          force:
+            true
         }
       );
 
     } catch (_) {}
 
   }
+
 }
 
 
@@ -1764,6 +1904,7 @@ app.get(
   ) => {
 
     res.json({
+
       status:
         'ok',
 
@@ -1771,7 +1912,7 @@ app.get(
         'n8n-ffmpeg-render',
 
       version:
-        '4.0-segment-fast',
+        '4.1-segment-900p',
 
       architecture:
         'individual-clips-plus-concat',
@@ -1800,12 +1941,13 @@ app.get(
       hard_timeout_minutes:
         HARD_TIMEOUT_MINUTES,
 
-      active:
-        active,
+      active,
 
       queue_length:
         queue.length
+
     });
+
   }
 );
 
@@ -1842,6 +1984,7 @@ app.post(
           error:
             'scenes required'
         });
+
     }
 
 
@@ -1858,6 +2001,7 @@ app.post(
           error:
             'audio_parts required'
         });
+
     }
 
 
@@ -1873,6 +2017,7 @@ app.post(
     saveJob(
       jobId,
       {
+
         jobId,
 
         status:
@@ -1916,6 +2061,7 @@ app.post(
 
         timeoutReached:
           false
+
       }
     );
 
@@ -1929,6 +2075,7 @@ app.post(
     return res
       .status(202)
       .json({
+
         job_id:
           jobId,
 
@@ -1940,7 +2087,9 @@ app.post(
 
         download_url:
           `/download/${jobId}`
+
       });
+
   }
 );
 
@@ -1973,6 +2122,7 @@ app.get(
           error:
             'Job not found'
         });
+
     }
 
 
@@ -2010,11 +2160,14 @@ app.get(
               1000
             )
           );
+
       }
+
     }
 
 
     return res.json({
+
       job_id:
         req.params.jobId,
 
@@ -2122,7 +2275,9 @@ app.get(
       completed_at:
         job.completedAt ??
         null
+
     });
+
   }
 );
 
@@ -2155,6 +2310,7 @@ app.get(
           error:
             'Job not found'
         });
+
     }
 
 
@@ -2166,6 +2322,7 @@ app.get(
       return res
         .status(409)
         .json({
+
           error:
             'Video not ready',
 
@@ -2177,7 +2334,9 @@ app.get(
 
           detail:
             job.error
+
         });
+
     }
 
 
@@ -2194,6 +2353,7 @@ app.get(
           error:
             'Video file missing'
         });
+
     }
 
 
@@ -2201,12 +2361,13 @@ app.get(
       job.outputPath,
       'final_video.mp4'
     );
+
   }
 );
 
 
 // ============================================================
-// DEBUG JOB
+// DEBUG
 // ============================================================
 
 app.get(
@@ -2233,10 +2394,14 @@ app.get(
           error:
             'Job not found'
         });
+
     }
 
 
-    return res.json(job);
+    return res.json(
+      job
+    );
+
   }
 );
 
@@ -2255,7 +2420,7 @@ app.listen(
     );
 
     console.log(
-      'N8N FFMPEG RENDER 4.0'
+      'N8N FFMPEG RENDER 4.1'
     );
 
     console.log(
